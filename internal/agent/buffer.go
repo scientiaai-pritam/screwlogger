@@ -2,7 +2,6 @@ package agent
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -23,8 +22,10 @@ type Buffer struct {
 }
 
 // OpenBuffer opens (or creates) the buffer file and recovers offsets after restart.
+// O_APPEND forces every write to EOF, so an Append after a partial Unacked/Ack
+// scan (which moves the fd offset mid-file) can never clobber buffered entries.
 func OpenBuffer(path string, maxBytes int64) (*Buffer, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, err
 	}
@@ -92,32 +93,61 @@ func (b *Buffer) Ack(count int) error {
 	return nil
 }
 
-// compact rewrites the file keeping only unacked entries.
+// compact rewrites the file keeping only unacked entries, atomically via rewrite.
 func (b *Buffer) compact() error {
 	unacked, err := b.Unacked(1 << 30)
 	if err != nil {
 		return err
 	}
-	var buf bytes.Buffer
-	for _, h := range unacked {
-		line, _ := json.Marshal(h)
-		buf.Write(line)
-		buf.WriteByte('\n')
-	}
-	if err := b.f.Truncate(0); err != nil {
+	return b.rewrite(unacked)
+}
+
+// rewrite atomically replaces the buffer file with the given entries: it writes
+// path+".tmp", fsyncs it, closes the old fd, renames the temp file over the
+// original, and reopens the fd (with O_APPEND, so post-rewrite appends land at
+// the new EOF, which is 0 after an empty rewrite). A crash at any point leaves
+// either the old or the new file intact — never a truncated one.
+func (b *Buffer) rewrite(entries []protocol.Heartbeat) error {
+	tmp := b.path + ".tmp"
+	tf, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
 		return err
 	}
-	if _, err := b.f.Seek(0, 0); err != nil {
+	var n int64
+	for _, h := range entries {
+		line, err := json.Marshal(h)
+		if err != nil {
+			tf.Close()
+			return err
+		}
+		if _, err := tf.Write(append(line, '\n')); err != nil {
+			tf.Close()
+			return err
+		}
+		n += int64(len(line)) + 1
+	}
+	if err := tf.Sync(); err != nil {
+		tf.Close()
 		return err
 	}
-	if _, err := b.f.Write(buf.Bytes()); err != nil {
+	if err := tf.Close(); err != nil {
 		return err
 	}
-	if err := b.f.Sync(); err != nil {
+	// The old fd must be closed before the rename: Windows refuses to replace
+	// a file that is still open.
+	if err := b.f.Close(); err != nil {
 		return err
 	}
+	if err := os.Rename(tmp, b.path); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(b.path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	b.f = f
 	b.ackedOff = 0
-	b.size = int64(buf.Len())
+	b.size = n
 	return nil
 }
 
@@ -131,28 +161,7 @@ func (b *Buffer) rotateIfFull() error {
 	if err != nil {
 		return err
 	}
-	keep := unacked[len(unacked)/2:]
-	var buf bytes.Buffer
-	for _, h := range keep {
-		line, _ := json.Marshal(h)
-		buf.Write(line)
-		buf.WriteByte('\n')
-	}
-	if err := b.f.Truncate(0); err != nil {
-		return err
-	}
-	if _, err := b.f.Seek(0, 0); err != nil {
-		return err
-	}
-	if _, err := b.f.Write(buf.Bytes()); err != nil {
-		return err
-	}
-	if err := b.f.Sync(); err != nil {
-		return err
-	}
-	b.ackedOff = 0
-	b.size = int64(buf.Len())
-	return nil
+	return b.rewrite(unacked[len(unacked)/2:])
 }
 
 // Close flushes and closes the underlying file.

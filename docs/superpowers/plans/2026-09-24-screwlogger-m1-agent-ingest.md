@@ -624,8 +624,9 @@ type Buffer struct {
 }
 
 // OpenBuffer opens (or creates) the buffer file and recovers offsets after restart.
+// O_APPEND forces every write to EOF so Append can never clobber entries mid-file.
 func OpenBuffer(path string, maxBytes int64) (*Buffer, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, err
 	}
@@ -694,6 +695,7 @@ func (b *Buffer) Ack(count int) error {
 }
 
 // compact rewrites the file keeping only unacked entries.
+// NOTE: the compact/rotate rewrite goes through a temp file + rename (never truncate-in-place).
 func (b *Buffer) compact() error {
 	unacked, err := b.Unacked(1 << 30)
 	if err != nil {
