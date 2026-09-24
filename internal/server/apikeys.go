@@ -63,6 +63,17 @@ func (s *Store) RevokeAPIKey(token string) error {
 	return err
 }
 
+// RevokeAPIKeyByPrefix marks every key whose hash begins with prefix revoked.
+// Returns the number of rows changed (0 if no such key).
+func (s *Store) RevokeAPIKeyByPrefix(prefix string) (int64, error) {
+	res, err := s.db.Exec(`UPDATE api_keys SET revoked_at = ? WHERE substr(key_hash, 1, 8) = ?`,
+		time.Now().Unix(), prefix)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // ListAPIKeys returns all API keys, newest first, without any plaintext.
 func (s *Store) ListAPIKeys() ([]APIKeyRow, error) {
 	rows, err := s.db.Query(`SELECT label, created_at, revoked_at, key_hash FROM api_keys ORDER BY created_at DESC`)

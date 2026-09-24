@@ -73,3 +73,28 @@ func TestListAPIKeysNoPlaintext(t *testing.T) {
 		t.Fatalf("plaintext key leaked in %+v", row)
 	}
 }
+
+func TestRevokeAPIKeyByPrefix(t *testing.T) {
+	s := openTestStore(t)
+	token, err := s.CreateAPIKey("build-bot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.ListAPIKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows=%+v", rows)
+	}
+	n, err := s.RevokeAPIKeyByPrefix(rows[0].HashPrefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("want 1 revoked, got %d", n)
+	}
+	if _, err := s.ResolveAPIKey(token); !errors.Is(err, server.ErrRevoked) {
+		t.Fatalf("want ErrRevoked, got %v", err)
+	}
+}
