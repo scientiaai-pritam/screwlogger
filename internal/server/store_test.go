@@ -64,6 +64,21 @@ func TestInsertAcceptsOutOfOrderTimestamps(t *testing.T) {
 	}
 }
 
+func TestListDevices(t *testing.T) {
+	s := openTestStore(t)
+	id, _, err := s.CreateDevice("PC-L1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.ListDevices()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].ID != id || rows[0].Name != "PC-L1" {
+		t.Fatalf("rows: %+v", rows)
+	}
+}
+
 func TestDeviceTokenAuth(t *testing.T) {
 	s := openTestStore(t)
 	devID, token, err := s.CreateDevice("PC-02")

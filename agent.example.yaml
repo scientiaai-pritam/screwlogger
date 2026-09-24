@@ -1,0 +1,5 @@
+# ScrewLogger agent configuration (spec §3.4). Copy to agent.yaml, fill in token.
+server_url: "http://192.168.1.50:8080"
+token: "sl_PASTE_DEVICE_TOKEN_HERE"
+data_dir: "C:\\ProgramData\\monsvc"
+idle_threshold_seconds: 180

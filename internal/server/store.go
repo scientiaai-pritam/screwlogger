@@ -155,6 +155,33 @@ func (s *Store) RevokeDevice(deviceID string) error {
 	return err
 }
 
+// DeviceRow is one enrolled device for admin listing.
+type DeviceRow struct {
+	ID        string
+	Name      string
+	EnrolledAt int64
+	LastSeen  sql.NullInt64
+	RevokedAt sql.NullInt64
+}
+
+// ListDevices returns all enrolled devices, newest first.
+func (s *Store) ListDevices() ([]DeviceRow, error) {
+	rows, err := s.db.Query(`SELECT id, name, enrolled_at, last_seen, revoked_at FROM devices ORDER BY enrolled_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DeviceRow
+	for rows.Next() {
+		var d DeviceRow
+		if err := rows.Scan(&d.ID, &d.Name, &d.EnrolledAt, &d.LastSeen, &d.RevokedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
 func hashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
