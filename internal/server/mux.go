@@ -12,6 +12,6 @@ func NewMux(store *Store, auth *AdminAuth) http.Handler {
 	mux.HandleFunc("POST /admin/login", auth.Login)
 	mux.HandleFunc("POST /admin/logout", auth.Logout)
 	mux.Handle("/admin/api/", AdminAPI(store, auth))
-	// TODO(Task 6): mux.Handle("/admin/", Dashboard(...))
+	mux.Handle("/admin/", Dashboard())
 	return mux
 }

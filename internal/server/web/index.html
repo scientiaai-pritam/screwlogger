@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ScrewLogger Admin</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <!-- Login view -->
+  <section id="login-view" class="view">
+    <form id="login-form" class="card login-card" autocomplete="off">
+      <h1>ScrewLogger</h1>
+      <p class="muted">Admin console</p>
+      <label for="password">Admin password</label>
+      <input type="password" id="password" autocomplete="current-password" required>
+      <p id="login-error" class="error" hidden></p>
+      <button type="submit" class="primary">Sign in</button>
+    </form>
+  </section>
+
+  <!-- App view -->
+  <section id="app-view" class="view" hidden>
+    <header class="topbar">
+      <div class="brand">ScrewLogger</div>
+      <nav id="nav" class="nav">
+        <button class="nav-btn" data-panel="devices">Devices</button>
+        <button class="nav-btn" data-panel="rules">Rules</button>
+        <button class="nav-btn" data-panel="keys">API keys</button>
+        <button class="nav-btn" data-panel="dashboards">Dashboards</button>
+      </nav>
+      <button id="logout" class="ghost">Log out</button>
+    </header>
+
+    <main>
+      <!-- Devices -->
+      <section id="panel-devices" class="panel">
+        <h2>Devices</h2>
+        <form id="enroll-form" class="inline-form">
+          <input type="text" id="enroll-name" placeholder="Device name (e.g. PC-04)" required>
+          <button type="submit" class="primary">Enroll device</button>
+        </form>
+        <div class="table-wrap">
+          <table id="devices-table">
+            <thead>
+              <tr><th>Name</th><th>Last seen</th><th>Status</th><th></th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Rules -->
+      <section id="panel-rules" class="panel" hidden>
+        <h2>Category rules</h2>
+        <form id="rule-form" class="inline-form rule-form">
+          <input type="text" id="rule-pattern" placeholder="Pattern (e.g. mes_*.exe)" required>
+          <input type="text" id="rule-category" placeholder="Category (e.g. Production)" required>
+          <label class="check"><input type="checkbox" id="rule-apply"> Apply to history</label>
+          <button type="submit" class="primary">Save rule</button>
+          <button type="button" id="rule-cancel" class="ghost" hidden>Cancel</button>
+        </form>
+        <div class="table-wrap">
+          <table id="rules-table">
+            <thead>
+              <tr><th>Pattern</th><th>Category</th><th>Updated</th><th></th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- API keys -->
+      <section id="panel-keys" class="panel" hidden>
+        <h2>API keys</h2>
+        <form id="key-form" class="inline-form">
+          <input type="text" id="key-label" placeholder="Key label (e.g. build-bot)" required>
+          <button type="submit" class="primary">Create key</button>
+        </form>
+        <div class="table-wrap">
+          <table id="keys-table">
+            <thead>
+              <tr><th>Label</th><th>Created</th><th>Revoked</th><th>Prefix</th><th></th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Dashboards -->
+      <section id="panel-dashboards" class="panel" hidden>
+        <h2>Dashboards</h2>
+        <div class="inline-form dash-controls">
+          <label for="device-select">Device</label>
+          <select id="device-select"></select>
+          <label for="range-select">Range</label>
+          <select id="range-select">
+            <option value="today">Today</option>
+            <option value="7d" selected>Last 7 days</option>
+            <option value="30d">Last 30 days</option>
+          </select>
+          <button id="refresh-dash" class="primary">Refresh</button>
+        </div>
+        <div class="grid">
+          <div class="chart-card">
+            <h3>Dwell by category</h3>
+            <div class="chart-box" id="box-category"></div>
+          </div>
+          <div class="chart-card">
+            <h3>Dwell by app</h3>
+            <div class="chart-box" id="box-app"></div>
+          </div>
+          <div class="chart-card">
+            <h3>Active / idle ratio</h3>
+            <div class="chart-box ratio" id="box-ratio"></div>
+          </div>
+          <div class="chart-card">
+            <h3>Hourly timeline</h3>
+            <div class="chart-box" id="box-hourly"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </section>
+
+  <!-- Toast -->
+  <div id="toast" class="toast" hidden></div>
+
+  <!-- One-time secret modal -->
+  <div id="modal" class="modal-backdrop" hidden>
+    <div class="modal card">
+      <h3 id="modal-title">Secret</h3>
+      <p class="muted">Copy this now — it is shown only once.</p>
+      <div class="secret-row">
+        <input type="text" id="modal-secret" readonly>
+        <button type="button" id="modal-copy" class="primary">Copy</button>
+      </div>
+      <button type="button" id="modal-close" class="primary">Continue</button>
+    </div>
+  </div>
+
+  <script src="chart.umd.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
