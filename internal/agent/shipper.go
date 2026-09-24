@@ -28,9 +28,14 @@ type Shipper struct {
 	failures  int
 }
 
+// defaultHTTPTimeout bounds one flush request. Flush holds the agent mutex
+// across the round trip, so an unbounded request (a half-open connection)
+// would stall the poller and under-report active time until TCP gives up.
+const defaultHTTPTimeout = 30 * time.Second
+
 func NewShipper(serverURL, token string, buf *Buffer, client *http.Client) *Shipper {
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{Timeout: defaultHTTPTimeout}
 	}
 	return &Shipper{serverURL: serverURL, token: token, buf: buf, client: client}
 }
