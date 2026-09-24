@@ -36,3 +36,14 @@ func TestIngestBatchWireFormat(t *testing.T) {
 		}
 	}
 }
+
+func TestIngestResponseWireFormat(t *testing.T) {
+	resp := protocol.IngestResponse{Accepted: 3}
+	b, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"accepted"`) {
+		t.Fatalf("missing %s in %s", `"accepted"`, b)
+	}
+}
