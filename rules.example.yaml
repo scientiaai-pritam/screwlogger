@@ -1,0 +1,8 @@
+# ScrewLogger agent categorization rules (spec §3.2).
+# Only {app, category, timestamps, active} ever leaves the PC.
+rules:
+  - {pattern: excel.exe, category: Office}
+  - {pattern: winword.exe, category: Office}
+  - {pattern: chrome.exe, category: Browser}
+  - {pattern: msedge.exe, category: Browser}
+  - {pattern: "mes_*.exe", category: Production}
