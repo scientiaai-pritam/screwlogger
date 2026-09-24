@@ -8,6 +8,7 @@ require golang.org/x/sys v0.35.0
 
 require (
 	github.com/google/uuid v1.6.0
+	golang.org/x/crypto v0.41.0
 	modernc.org/sqlite v1.38.0
 )
 
