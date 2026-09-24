@@ -14,6 +14,9 @@
 
 * { box-sizing: border-box; }
 
+/* The hidden attribute must always win, even against display:flex/block. */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   padding: 0;
