@@ -16,7 +16,7 @@ reports that to a server on the LAN.
 │  foreground/idle sources │    POST /v1/ingest                       │  ingest → SQLite (WAL)   │
 │  heartbeat builder       │  ◀────────────────────────────────────── │  device tokens (sha256)  │
 │  categorizer (rules.yaml)│              ack + backoff               │  enroll / healthz        │
-│  durable JSONL buffer    │                                          │  (query API: M2)         │
+│  durable JSONL buffer    │                                          │  (query API + admin UI) │
 │  shipper                 │                                          └──────────────────────────┘
 └─────────────────────────┘
 ```
@@ -33,10 +33,10 @@ reports that to a server on the LAN.
 
 ```
 cmd/agent/          agent entrypoint (console mode for M1)
-cmd/server/         server entrypoint (ingest API + healthz)
+cmd/server/         server entrypoint (ingest, query API, admin UI)
 internal/agent/     sources, heartbeat builder, categorizer, buffer, shipper, config, loop
 internal/protocol/  wire types (Heartbeat, IngestBatch, IngestResponse)
-internal/server/    store (SQLite), ingest handler
+internal/server/    store (SQLite), ingest + query API + admin API + embedded dashboard
 docs/superpowers/   design spec + implementation plan
 .superpowers/sdd/   subagent-development ledger, task briefs, reviews
 ```
@@ -98,14 +98,61 @@ flushes to the server every 60s (backing off 15s → 60s → 5min on failures).
 Drop a `rules.yaml` in the agent's `data_dir` to map executables to categories (case-insensitive
 glob; exact match wins). Without it, everything reports as `Uncategorized`.
 
+### Server flags
+
+| Flag                | Description                                                       |
+|---------------------|-------------------------------------------------------------------|
+| `-db <path>`        | SQLite database file (default `screwlogger.db`)                   |
+| `-addr <addr>`      | Listen address (default `:8080`)                                  |
+| `-enroll <name>`    | Enroll a device by name, print its one-time `sl_` token, then exit |
+| `-apikey <label>`   | Create a read-only API key with this label, print it once, then exit |
+| `-admin-password`   | Admin password (empty generates a random one, logged once)        |
+
 ## API
+
+### Ingest & health
 
 | Method | Path          | Auth    | Description                                   |
 |--------|---------------|---------|-----------------------------------------------|
 | POST   | `/v1/ingest`  | Bearer  | Ingest a heartbeat batch (idempotent by UUID) |
 | GET    | `/healthz`    | none    | Liveness check                                |
 
-The open **query API** for other applications to fetch aggregated data is planned for M2.
+### Query API (read-only)
+
+An open, read-only API for other LAN applications to fetch aggregated usage data. Every route
+requires `Authorization: Bearer ak_<key>` — API keys are read-only, stored SHA-256-hashed, and
+created via the admin UI or the `-apikey <label>` flag. CORS `*` is enabled for `/api/v1/*`.
+
+| Method | Path                  | Query params                          | Description                                              |
+|--------|-----------------------|---------------------------------------|----------------------------------------------------------|
+| GET    | `/api/v1/devices`     | —                                     | Enrolled devices (id, name, status, timestamps)          |
+| GET    | `/api/v1/usage`       | `device`, `from`, `to`, `group_by`    | Dwell seconds bucketed by `category` (default) or `app`  |
+| GET    | `/api/v1/active-ratio`| `device`, `from`, `to`                | Active vs idle seconds and ratio in the window           |
+| GET    | `/api/v1/events`      | `device`, `from`, `to`, `limit`       | Raw heartbeats (`id`, `ts`, `app`, `category`, `active`) |
+
+`device` may be empty for a fleet-wide query; `from`/`to` are unix seconds (default `0`/now);
+`limit` is clamped to `[1, 10000]` (default 1000). Responses never contain device tokens or API
+keys.
+
+## Admin UI & dashboards
+
+Run the server with an admin password, then open the dashboard:
+
+```bash
+./server -db screwlogger.db -admin-password 'change-me'
+# open http://localhost:8080/admin/ and log in
+```
+
+If `-admin-password` is empty, a random password is generated and logged once at startup. The
+dashboard is a single embedded page (no CDN — Chart.js is vendored) with four panels:
+
+- **Devices** — enrolled PCs (name, last seen, status) plus an enroll form that shows the
+  one-time `sl_` token once, and a revoke button.
+- **Rules** — edit `pattern → category` rules with an "apply to history" action that re-maps
+  existing heartbeats.
+- **API keys** — create (shows the `ak_…` key once) and revoke read-only API keys.
+- **Dashboards** — per-device or fleet dwell-by-category, dwell-by-app, active/idle ratio, and an
+  hourly timeline.
 
 ## Privacy & deployment
 
@@ -115,7 +162,6 @@ identity is assigned at install time via enrollment.
 
 ## Status
 
-**M1 (this branch):** agent + ingest pipeline complete, full test suite green, final review clean.
-
-Follow-ups tracked for M2: manual Win32 dev-PC smoke test, an open query API + dashboard, and a
-set of deferred review minors (see `.superpowers/sdd/.../final-review-*.diff`).
+- **M1:** agent + ingest pipeline complete, full test suite green, final review clean.
+- **M2:** query API + admin UI + dashboards complete (this branch).
+- **M3 (next):** installer/service hardening.
