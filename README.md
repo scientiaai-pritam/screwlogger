@@ -32,9 +32,9 @@ reports that to a server on the LAN.
 ## Repository layout
 
 ```
-cmd/agent/          agent entrypoint (console mode for M1)
+cmd/agent/          agent entrypoint (console mode + -install/-uninstall/-upgrade/-service)
 cmd/server/         server entrypoint (ingest, query API, admin UI)
-internal/agent/     sources, heartbeat builder, categorizer, buffer, shipper, config, loop
+internal/agent/     sources, heartbeat builder, categorizer, buffer, shipper, config, loop, service, installer
 internal/protocol/  wire types (Heartbeat, IngestBatch, IngestResponse)
 internal/server/    store (SQLite), ingest + query API + admin API + embedded dashboard
 docs/superpowers/   design spec + implementation plan
@@ -93,6 +93,15 @@ monsvc.exe -config agent.yaml
 The agent polls the foreground window + idle state (default 1s), buffers heartbeats, and
 flushes to the server every 60s (backing off 15s → 60s → 5min on failures).
 
+Alternatively, install it as the `monsvc` service instead of running it in the
+foreground:
+
+```bash
+# from an elevated (Administrator) prompt:
+monsvc.exe -install -server http://192.168.1.50:8080 -token sl_...
+# writes agent.yaml next to the binary and registers the monsvc service (auto-start)
+```
+
 ### 4. Categorize apps (optional)
 
 Drop a `rules.yaml` in the agent's `data_dir` to map executables to categories (case-insensitive
@@ -107,6 +116,19 @@ glob; exact match wins). Without it, everything reports as `Uncategorized`.
 | `-enroll <name>`    | Enroll a device by name, print its one-time `sl_` token, then exit |
 | `-apikey <label>`   | Create a read-only API key with this label, print it once, then exit |
 | `-admin-password`   | Admin password (empty generates a random one, logged once)        |
+
+## Deployment
+
+- **Install**: enroll the PC on the server first to get its `sl_` token (see Quick start), then
+  from an elevated prompt run
+  `monsvc.exe -install -server http://<server>:8080 -token sl_...`. The service runs as SYSTEM
+  under the plain name `monsvc`, auto-starts at boot, and auto-restarts on failure (1s / 15s / 60s
+  ladder).
+- **Upgrade**: `monsvc.exe -upgrade -new C:\path\new\monsvc.exe` stops the service, replaces the
+  binary, and restarts it — `agent.yaml` and the device token are untouched. Manual fallback: stop
+  the service, replace the exe by hand, then start it again.
+- **Uninstall**: `monsvc.exe -uninstall` (from an elevated prompt) stops and removes the service.
+- **Data dir**: `-data-dir` defaults to `C:\ProgramData\monsvc`.
 
 ## API
 
@@ -156,12 +178,14 @@ dashboard is a single embedded page (no CDN — Chart.js is vendored) with four 
 
 ## Privacy & deployment
 
-The agent is designed as a quiet service (`monsvc`) with no tray icon, documented in employee
-policy. Tokens are stored server-side only as SHA-256 hashes and can be revoked. Device
-identity is assigned at install time via enrollment.
+The agent runs as a SYSTEM service (`monsvc`) — quiet (no tray icon, no Start-menu entry),
+auto-start, and documented in employee policy. Tokens are stored server-side only as SHA-256
+hashes and can be revoked. Device identity is assigned at install time via enrollment.
 
 ## Status
 
 - **M1:** agent + ingest pipeline complete, full test suite green, final review clean.
-- **M2:** query API + admin UI + dashboards complete (this branch).
-- **M3 (next):** installer/service hardening.
+- **M2:** query API + admin UI + dashboards complete.
+- **M3:** Windows service + installer (monsvc SYSTEM service, -install/-upgrade/-uninstall) complete.
+
+Next: manual Win32 dev-PC smoke test, then pilot (5–10 factory PCs) → fleet rollout.

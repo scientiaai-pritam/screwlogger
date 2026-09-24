@@ -1,4 +1,5 @@
 # ScrewLogger agent configuration (spec §3.4). Copy to agent.yaml, fill in token.
+# Or install as a service: monsvc.exe -install -server <url> -token sl_...
 server_url: "http://192.168.1.50:8080"
 token: "sl_PASTE_DEVICE_TOKEN_HERE"
 data_dir: "C:\\ProgramData\\monsvc"
