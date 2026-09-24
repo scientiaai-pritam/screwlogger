@@ -101,6 +101,33 @@ func TestIngestMalformedJSONRejected(t *testing.T) {
 	}
 }
 
+func TestIngestMissingBearer(t *testing.T) {
+	srv, _ := ingestServer(t)
+	body, _ := json.Marshal(validBatch())
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/ingest", bytes.NewReader(body))
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("missing bearer: %d", resp.StatusCode)
+	}
+}
+
+func TestIngestMethodNotAllowed(t *testing.T) {
+	srv, _ := ingestServer(t)
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/v1/ingest", nil)
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("GET: %d", resp.StatusCode)
+	}
+}
+
 func TestIngestRevokedToken403(t *testing.T) {
 	s, err := server.OpenStore(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {

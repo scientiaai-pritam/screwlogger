@@ -9,11 +9,16 @@ import (
 	"screwlogger/internal/protocol"
 )
 
+// maxIngestBody caps the request body at 1 MiB — far above the shipper's
+// 500-heartbeat batch (~75 KiB), enough headroom for backfill bursts.
+const maxIngestBody = 1 << 20
+
 // IngestHandler serves POST /v1/ingest with device-token auth (spec §3.5).
 // Any 4xx writes zero rows (Review Focus #5).
 func IngestHandler(store *Store) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
 			writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
@@ -28,9 +33,15 @@ func IngestHandler(store *Store) http.Handler {
 				writeErr(w, http.StatusForbidden, "device token revoked")
 				return
 			}
-			writeErr(w, http.StatusUnauthorized, "invalid device token")
+			if errors.Is(err, ErrUnknownToken) {
+				writeErr(w, http.StatusUnauthorized, "invalid device token")
+				return
+			}
+			log.Printf("ingest: auth: %v", err)
+			writeErr(w, http.StatusInternalServerError, "storage error")
 			return
 		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxIngestBody)
 		var batch protocol.IngestBatch
 		if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
 			writeErr(w, http.StatusBadRequest, "malformed JSON body")

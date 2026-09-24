@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -17,6 +16,9 @@ import (
 
 // ErrRevoked is returned when a valid token belongs to a revoked device.
 var ErrRevoked = errors.New("device token revoked")
+
+// ErrUnknownToken is returned when a token matches no enrolled device.
+var ErrUnknownToken = errors.New("unknown device token")
 
 const schema = `
 CREATE TABLE IF NOT EXISTS devices (
@@ -97,7 +99,7 @@ func (s *Store) InsertHeartbeats(deviceID string, agentSentAt int64, hbs []proto
 		if err != nil {
 			return 0, err
 		}
-		if n, _ := res.RowsAffected(); n > 0 {
+		if n, err := res.RowsAffected(); err == nil && n > 0 {
 			accepted++
 		}
 	}
@@ -136,7 +138,7 @@ func (s *Store) DeviceIDByToken(token string) (string, error) {
 	err := s.db.QueryRow(`SELECT id, revoked_at FROM devices WHERE token_hash = ?`, hashToken(token)).
 		Scan(&id, &revoked)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("unknown device token")
+		return "", ErrUnknownToken
 	}
 	if err != nil {
 		return "", err
