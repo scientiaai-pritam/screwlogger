@@ -139,7 +139,7 @@ hashes and can be revoked. Device identity is assigned at install time via enrol
 
 **M3 (this branch):** Windows service + installer (monsvc SYSTEM service, -install/-upgrade/-uninstall) complete.
 
-**M1 (this branch):** agent + ingest pipeline complete, full test suite green, final review clean.
+**M1:** agent + ingest pipeline complete, full test suite green, final review clean.
 
 Follow-ups tracked for M2: manual Win32 dev-PC smoke test, an open query API + dashboard, and a
 set of deferred review minors (see `.superpowers/sdd/.../final-review-*.diff`).
