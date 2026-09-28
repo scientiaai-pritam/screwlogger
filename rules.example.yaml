@@ -1,8 +1,19 @@
 # ScrewLogger agent categorization rules (spec §3.2).
 # Only {app, category, timestamps, active} ever leaves the PC.
+#
+# Each rule maps an executable name to a category, compared case-insensitively.
+# `pattern` is an exact name or a glob (* ?); exact match wins over glob, and
+# the first rule wins among equals. Unmatched apps fall into "Uncategorized".
+#
+# NOTE: rules match the EXECUTABLE only (e.g. "chrome.exe"), not the site or
+# tab inside it. "Chrome on Pinterest/Yandex/textile-designer.ai → Productive"
+# is not expressible here — the agent only resolves the foreground process
+# name, never the URL or window title. Per-site browser categorization needs
+# a browser extension (post-M3 backlog, spec §9/§10).
 rules:
   - {pattern: excel.exe, category: Office}
   - {pattern: winword.exe, category: Office}
+  - {pattern: photoshop.exe, category: Productive}
   - {pattern: chrome.exe, category: Browser}
   - {pattern: msedge.exe, category: Browser}
   - {pattern: "mes_*.exe", category: Production}
