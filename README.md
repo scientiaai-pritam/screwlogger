@@ -104,8 +104,25 @@ monsvc.exe -install -server http://192.168.1.50:8080 -token sl_...
 
 ### 4. Categorize apps (optional)
 
-Drop a `rules.yaml` in the agent's `data_dir` to map executables to categories (case-insensitive
-glob; exact match wins). Without it, everything reports as `Uncategorized`.
+Copy `rules.example.yaml` to `rules.yaml` in the agent's `data_dir`, then edit it:
+
+```yaml
+rules:
+  - {pattern: excel.exe, category: Office}
+  - {pattern: winword.exe, category: Office}
+  - {pattern: photoshop.exe, category: Productive}
+  - {pattern: chrome.exe, category: Browser}
+  - {pattern: msedge.exe, category: Browser}
+  - {pattern: "mes_*.exe", category: Production}
+```
+
+Each rule maps an executable name to a category, matched case-insensitively. `pattern` is an
+exact name or a glob (`* ?`); exact match wins over glob. Without a `rules.yaml`, everything
+reports as `Uncategorized`.
+
+> Rules match the **executable name only** (e.g. `chrome.exe`), not the site or tab open inside a
+> browser — per-site rules (like "Chrome on Pinterest → Productive") need a browser extension and
+> aren't supported yet.
 
 ### Server flags
 
