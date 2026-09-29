@@ -109,6 +109,62 @@ func TestRenameDeviceUnknownID(t *testing.T) {
 	}
 }
 
+func TestDeleteDeviceRemovesRevokedAndHistory(t *testing.T) {
+	s := openTestStore(t)
+	id, _, err := s.CreateDevice("PC-OLD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.InsertHeartbeats(id, 1729800001, []protocol.Heartbeat{
+		hbWithID("h1", 1729800000), hbWithID("h2", 1729800015),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RevokeDevice(id); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteDevice(id); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.ListDevices()
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("device must be gone: rows=%+v err=%v", rows, err)
+	}
+	evs, err := s.ListEvents(id, 0, 1729900000, 10)
+	if err != nil || len(evs) != 0 {
+		t.Fatalf("heartbeats must be gone: evs=%+v err=%v", evs, err)
+	}
+}
+
+func TestDeleteDeviceRefusesActive(t *testing.T) {
+	s := openTestStore(t)
+	id, _, err := s.CreateDevice("PC-LIVE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.InsertHeartbeats(id, 1729800001, []protocol.Heartbeat{hbWithID("h1", 1729800000)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteDevice(id); !errors.Is(err, server.ErrNotRevoked) {
+		t.Fatalf("want ErrNotRevoked, got %v", err)
+	}
+	rows, err := s.ListDevices()
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("active device must survive: rows=%+v err=%v", rows, err)
+	}
+	evs, err := s.ListEvents(id, 0, 1729900000, 10)
+	if err != nil || len(evs) != 1 {
+		t.Fatalf("active device's history must survive: evs=%+v err=%v", evs, err)
+	}
+}
+
+func TestDeleteDeviceUnknownID(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.DeleteDevice("deadbeef"); !errors.Is(err, server.ErrUnknownDevice) {
+		t.Fatalf("want ErrUnknownDevice, got %v", err)
+	}
+}
+
 func TestDeviceTokenAuth(t *testing.T) {
 	s := openTestStore(t)
 	devID, token, err := s.CreateDevice("PC-02")

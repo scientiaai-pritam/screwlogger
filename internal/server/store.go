@@ -23,6 +23,9 @@ var ErrUnknownToken = errors.New("unknown device token")
 // ErrUnknownDevice is returned when a device ID matches no enrolled device.
 var ErrUnknownDevice = errors.New("unknown device")
 
+// ErrNotRevoked is returned when deleting a device that is not revoked.
+var ErrNotRevoked = errors.New("device not revoked")
+
 const schema = `
 CREATE TABLE IF NOT EXISTS devices (
   id TEXT PRIMARY KEY,
@@ -171,6 +174,39 @@ func (s *Store) RenameDevice(deviceID, name string) error {
 		return ErrUnknownDevice
 	}
 	return nil
+}
+
+// DeleteDevice permanently removes a revoked device and all of its heartbeats,
+// in one transaction. Only revoked devices qualify: the revoked_at guard is
+// what keeps an active device's history from being dropped by mistake.
+func (s *Store) DeleteDevice(deviceID string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var revoked sql.NullInt64
+	err = tx.QueryRow(`SELECT revoked_at FROM devices WHERE id = ?`, deviceID).Scan(&revoked)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrUnknownDevice
+	}
+	if err != nil {
+		return err
+	}
+	if !revoked.Valid {
+		return ErrNotRevoked
+	}
+	if _, err := tx.Exec(`DELETE FROM heartbeats WHERE device_id = ?`, deviceID); err != nil {
+		return err
+	}
+	res, err := tx.Exec(`DELETE FROM devices WHERE id = ?`, deviceID)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return ErrUnknownDevice
+	}
+	return tx.Commit()
 }
 
 // DeviceRow is one enrolled device for admin listing.
