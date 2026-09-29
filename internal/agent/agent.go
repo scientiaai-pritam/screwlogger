@@ -89,8 +89,13 @@ func (a *Agent) Run(ctx context.Context) error {
 }
 
 func (a *Agent) pollOnce() {
-	app := a.fg.ForegroundApp()
-	active := a.idle.IdleSeconds() < float64(a.cfg.IdleThresholdSeconds)
+	a.Observe(a.fg.ForegroundApp(), a.idle.IdleSeconds() < float64(a.cfg.IdleThresholdSeconds))
+}
+
+// Observe feeds one foreground/active reading through the heartbeat builder,
+// categorizer, and buffer. Console mode calls it per tick; service mode calls
+// it per pipe sample.
+func (a *Agent) Observe(app string, active bool) {
 	hb := a.builder.Observe(app, active)
 	if hb == nil {
 		return
@@ -101,6 +106,32 @@ func (a *Agent) pollOnce() {
 	defer a.mu.Unlock()
 	if err := a.buf.Append(*hb); err != nil {
 		log.Printf("buffer append: %v", err)
+	}
+}
+
+// RunSamples consumes watcher samples until ctx is cancelled, shipping in a
+// separate goroutine (service mode). Samples arrive over the local pipe; no
+// samples — watcher dead, no user logged on — means no heartbeats, so the
+// device reports offline (spec §5).
+func (a *Agent) RunSamples(ctx context.Context, samples <-chan Sample) error {
+	defer func() {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		a.buf.Close()
+	}()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		a.shipLoop(ctx)
+	}()
+	for {
+		select {
+		case <-ctx.Done():
+			<-done // let the shipper finish its current attempt
+			return nil
+		case s := <-samples:
+			a.Observe(s.App, s.Active)
+		}
 	}
 }
 
