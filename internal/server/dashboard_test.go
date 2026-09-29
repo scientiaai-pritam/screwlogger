@@ -46,4 +46,12 @@ func TestDashboardServesAdminUI(t *testing.T) {
 	if w = get("/admin/nonexistent.css"); w.Code != http.StatusNotFound {
 		t.Fatalf("GET /admin/nonexistent.css: want 404, got %d", w.Code)
 	}
+
+	// Assets must be uncacheable: a browser that pins a stale app.js hides
+	// every UI change shipped after it (observed after the rename feature).
+	for _, path := range []string{"/admin/", "/admin/app.js"} {
+		if cc := get(path).Header().Get("Cache-Control"); cc != "no-store" {
+			t.Fatalf("GET %s: want Cache-Control no-store, got %q", path, cc)
+		}
+	}
 }
