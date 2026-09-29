@@ -183,9 +183,28 @@
         btn.disabled = d.status === "revoked";
         btn.addEventListener("click", function () { revokeDevice(d.id, d.name); });
         cell.appendChild(btn);
+        if (d.status === "revoked") {
+          var del = document.createElement("button");
+          del.className = "danger";
+          del.textContent = "Delete";
+          del.addEventListener("click", function () { deleteDevice(d.id, d.name); });
+          cell.appendChild(del);
+        }
         tbody.appendChild(tr);
       });
     });
+  }
+
+  // Permanent removal, offered only for revoked devices (the server refuses
+  // active ones): drops the device row and all of its heartbeat history.
+  function deleteDevice(id, name) {
+    if (!confirm("Delete device \"" + name + "\" permanently? Its heartbeat history is removed too.")) return;
+    api("/admin/api/devices/" + encodeURIComponent(id), { method: "DELETE" })
+      .then(function (res) {
+        if (!authed(res)) return;
+        toast("Device deleted");
+        loadDevices();
+      });
   }
 
   // Inline rename: swaps the name cell for an input + Save/Cancel until the
