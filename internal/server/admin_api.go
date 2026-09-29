@@ -19,6 +19,7 @@ func AdminAPI(store *Store, auth *AdminAuth) http.Handler {
 	api.HandleFunc("GET /admin/api/devices", handleDevices(store))
 	api.HandleFunc("POST /admin/api/devices/{id}/revoke", handleDeviceRevoke(store))
 	api.HandleFunc("PUT /admin/api/devices/{id}/name", handleDeviceRename(store))
+	api.HandleFunc("DELETE /admin/api/devices/{id}", handleDeviceDelete(store))
 	api.HandleFunc("GET /admin/api/rules", handleRulesList(store))
 	api.HandleFunc("PUT /admin/api/rules", handleRuleUpsert(store))
 	api.HandleFunc("DELETE /admin/api/rules", handleRuleDelete(store))
@@ -97,6 +98,29 @@ func handleDeviceRename(store *Store) http.HandlerFunc {
 				return
 			}
 			log.Printf("admin api: rename device %s: %v", id, err)
+			writeErr(w, http.StatusInternalServerError, "storage error")
+			return
+		}
+		writeJSON(w, map[string]bool{"ok": true})
+	}
+}
+
+// handleDeviceDelete permanently removes a revoked device and its heartbeats.
+// Active devices are refused (409): revoke first, then delete.
+func handleDeviceDelete(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		err := store.DeleteDevice(id)
+		switch {
+		case err == nil:
+		case errors.Is(err, ErrUnknownDevice):
+			writeErr(w, http.StatusNotFound, "unknown device")
+			return
+		case errors.Is(err, ErrNotRevoked):
+			writeErr(w, http.StatusConflict, "device is not revoked")
+			return
+		default:
+			log.Printf("admin api: delete device %s: %v", id, err)
 			writeErr(w, http.StatusInternalServerError, "storage error")
 			return
 		}

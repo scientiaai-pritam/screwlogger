@@ -72,6 +72,7 @@ func TestAdminAPIRequiresSession(t *testing.T) {
 		{"GET", "/admin/api/devices"},
 		{"POST", "/admin/api/devices/someid/revoke"},
 		{"PUT", "/admin/api/devices/someid/name"},
+		{"DELETE", "/admin/api/devices/someid"},
 		{"GET", "/admin/api/rules"},
 		{"PUT", "/admin/api/rules"},
 		{"DELETE", "/admin/api/rules"},
@@ -414,5 +415,69 @@ func TestAdminRenameDeviceValidation(t *testing.T) {
 	rows, err := s.ListDevices()
 	if err != nil || len(rows) != 1 || rows[0].Name != "PC-4" {
 		t.Fatalf("failed renames must not persist: %+v err=%v", rows, err)
+	}
+}
+
+func TestAdminDeleteRevokedDevice(t *testing.T) {
+	s, auth, h := adminAPI(t)
+	cookie := adminLogin(t, auth, "s3cret")
+
+	id, token, err := s.CreateDevice("PC-OLD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	insertHBs(t, s, id, hbeat("h1", 1000, "excel.exe", "Office", true))
+	if err := s.RevokeDevice(id); err != nil {
+		t.Fatal(err)
+	}
+
+	dw := adminReq(h, "DELETE", "/admin/api/devices/"+id, cookie, nil)
+	if dw.Code != http.StatusOK {
+		t.Fatalf("delete revoked: want 200, got %d (%s)", dw.Code, dw.Body.String())
+	}
+	rows, err := s.ListDevices()
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("device must be gone: rows=%+v err=%v", rows, err)
+	}
+	// The deleted device's token must no longer ingest at all.
+	ingest := server.IngestHandler(s)
+	body, _ := json.Marshal(protocol.IngestBatch{
+		SchemaVersion: protocol.SchemaVersion,
+		Heartbeats:    []protocol.Heartbeat{{ID: "h2", TS: 1001, App: "excel.exe", Category: "Office", Active: true}},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/ingest", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	iw := httptest.NewRecorder()
+	ingest.ServeHTTP(iw, req)
+	if iw.Code != http.StatusForbidden {
+		t.Fatalf("deleted device token: want 403, got %d (%s)", iw.Code, iw.Body.String())
+	}
+}
+
+func TestAdminDeleteDeviceGuards(t *testing.T) {
+	s, auth, h := adminAPI(t)
+	cookie := adminLogin(t, auth, "s3cret")
+
+	id, _, err := s.CreateDevice("PC-LIVE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	insertHBs(t, s, id, hbeat("h1", 1000, "excel.exe", "Office", true))
+
+	// An active device must not be deletable (409), and its data must survive.
+	aw := adminReq(h, "DELETE", "/admin/api/devices/"+id, cookie, nil)
+	if aw.Code != http.StatusConflict {
+		t.Fatalf("delete active: want 409, got %d (%s)", aw.Code, aw.Body.String())
+	}
+	rows, err := s.ListDevices()
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("active device must survive: rows=%+v err=%v", rows, err)
+	}
+
+	// Unknown ID → 404.
+	uw := adminReq(h, "DELETE", "/admin/api/devices/nosuchdev", cookie, nil)
+	if uw.Code != http.StatusNotFound {
+		t.Fatalf("delete unknown: want 404, got %d (%s)", uw.Code, uw.Body.String())
 	}
 }
