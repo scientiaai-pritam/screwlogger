@@ -7,6 +7,7 @@ import (
 	"errors"
 	"testing"
 
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 )
 
@@ -34,8 +35,8 @@ func TestExecuteGracefulStop(t *testing.T) {
 	if s := <-statusCh; s.State != svc.StartPending {
 		t.Fatalf("first status = %v, want StartPending", s.State)
 	}
-	if s := <-statusCh; s.State != svc.Running || s.Accepts&(svc.AcceptStop|svc.AcceptShutdown) != svc.AcceptStop|svc.AcceptShutdown {
-		t.Fatalf("second status = %+v, want Running accepting Stop|Shutdown", s)
+	if s := <-statusCh; s.State != svc.Running || s.Accepts&(svc.AcceptStop|svc.AcceptShutdown|svc.AcceptSessionChange) != svc.AcceptStop|svc.AcceptShutdown|svc.AcceptSessionChange {
+		t.Fatalf("second status = %+v, want Running accepting Stop|Shutdown|SessionChange", s)
 	}
 
 	// Interrogate echoes the current status back (Running).
@@ -89,4 +90,32 @@ func TestExecuteCleanExitStillNonzero(t *testing.T) {
 	if !res.svcSpecific || res.exitCode != 1 {
 		t.Fatalf("result = %+v, want svcSpecific=true exitCode=1", res)
 	}
+}
+
+func TestExecuteSessionChangePokes(t *testing.T) {
+	pokes := 0
+	h := &serviceHandler{
+		run:           func(ctx context.Context) error { <-ctx.Done(); return nil },
+		sessionChange: func() { pokes++ },
+	}
+	reqCh := make(chan svc.ChangeRequest)
+	statusCh := make(chan svc.Status, 8)
+	done := make(chan struct{})
+	go func() { h.Execute(nil, reqCh, statusCh); close(done) }()
+	<-statusCh // StartPending
+	<-statusCh // Running
+
+	reqCh <- svc.ChangeRequest{Cmd: svc.SessionChange, EventType: windows.WTS_REMOTE_CONNECT}
+	// Interrogate is received after the SessionChange (FIFO channel), so its
+	// echo proves the poke already ran — the send alone only synchronizes
+	// with the receive.
+	reqCh <- svc.ChangeRequest{Cmd: svc.Interrogate, CurrentStatus: svc.Status{State: svc.Running}}
+	if s := <-statusCh; s.State != svc.Running {
+		t.Fatalf("interrogate echo = %v, want Running", s.State)
+	}
+	if pokes != 1 {
+		t.Fatalf("pokes = %d, want 1", pokes)
+	}
+	reqCh <- svc.ChangeRequest{Cmd: svc.Stop}
+	<-done
 }

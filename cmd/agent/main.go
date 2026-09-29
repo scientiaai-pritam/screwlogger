@@ -22,6 +22,8 @@ import (
 func main() {
 	cfgPath := flag.String("config", "agent.yaml", "path to agent.yaml (console mode)")
 	service := flag.Bool("service", false, "run as the monsvc Windows service (invoked by the SCM)")
+	userwatch := flag.Bool("userwatch", false, "run the in-session watcher (spawned by the monsvc service)")
+	idle := flag.Int("idle", 180, "idle threshold in seconds (with -userwatch)")
 	install := flag.Bool("install", false, "install and start the monsvc service")
 	uninstall := flag.Bool("uninstall", false, "stop and remove the monsvc service")
 	upgrade := flag.Bool("upgrade", false, "stop, replace (optional), and restart the monsvc service")
@@ -38,6 +40,8 @@ func main() {
 		runUninstall()
 	case *upgrade:
 		runUpgrade(*newExe)
+	case *userwatch:
+		runWatcher(*idle)
 	case *service:
 		runService()
 	default:
@@ -68,16 +72,30 @@ func runConsole(cfgPath string) {
 }
 
 // runService is the production path, invoked by the SCM. Config is read from
-// agent.yaml next to the binary, not from -config.
+// agent.yaml next to the binary, not from -config. The service spawns the
+// in-session watcher and ships its samples (spec §3).
 func runService() {
 	exe, _ := os.Executable()
 	cfg, err := agent.LoadConfig(filepath.Join(filepath.Dir(exe), "agent.yaml"))
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
-	fg, idle := agent.NewWin32Sources()
-	if err := agent.RunService("monsvc", cfg, fg, idle, time.Now); err != nil {
+	if err := agent.RunService("monsvc", cfg, time.Now); err != nil {
 		log.Fatalf("service: %v", err)
+	}
+}
+
+// runWatcher is the in-session production path: launched by the monsvc service
+// inside the logged-on user's session, it polls foreground/idle and streams
+// samples to the service over the local pipe (spec §4.1). It holds no config
+// file, no token, and writes nothing to disk.
+func runWatcher(idleSeconds int) {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	fg, idle := agent.NewWin32Sources()
+	err := agent.RunWatcher(ctx, idleSeconds, agent.WatcherDeps{FG: fg, Idle: idle})
+	if err != nil && ctx.Err() == nil {
+		log.Fatalf("watcher: %v", err)
 	}
 }
 

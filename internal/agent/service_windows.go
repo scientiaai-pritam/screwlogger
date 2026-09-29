@@ -5,31 +5,53 @@ package agent
 import (
 	"context"
 	"log"
+	"os"
 	"time"
 
 	"golang.org/x/sys/windows/svc"
 )
 
 // serviceHandler is the svc.Handler for monsvc. run is injectable so the
-// Execute loop is testable without a real service control manager.
+// Execute loop is testable without a real service control manager;
+// sessionChange (nil-safe) fires on WTS session events so the spawner can
+// reconcile immediately (spec §4.2).
 type serviceHandler struct {
-	run func(ctx context.Context) error
+	run           func(ctx context.Context) error
+	sessionChange func()
 }
 
-// defaultRun builds the agent the same way console mode does, then runs it.
-func defaultRun(cfg Config, fg ForegroundSource, idle IdleSource, now func() time.Time) func(context.Context) error {
+// composeServiceRun builds the service-mode agent: the pipe server publishes
+// watcher samples, the spawner keeps a watcher alive, and the agent consumes
+// samples (no samples → no heartbeats).
+func composeServiceRun(cfg Config, now func() time.Time, pipe *PipeServer, sp *Spawner) func(context.Context) error {
 	return func(ctx context.Context) error {
+		fg, idle := NewWin32Sources() // required by New; unused in service mode
 		a, err := New(cfg, fg, idle, now)
 		if err != nil {
 			return err
 		}
-		return a.Run(ctx)
+		samples := make(chan Sample, 128)
+		go pipe.Serve(ctx, samples)
+		go sp.Run(ctx)
+		return a.RunSamples(ctx, samples)
 	}
 }
 
-// RunService runs the agent as the named Windows service (blocking).
-func RunService(name string, cfg Config, fg ForegroundSource, idle IdleSource, now func() time.Time) error {
-	return svc.Run(name, &serviceHandler{run: defaultRun(cfg, fg, idle, now)})
+// RunService runs the agent as the named Windows service (blocking). The
+// service never polls Win32 itself — it runs the sample pipe server and the
+// watcher spawner, and feeds pipe samples into the agent (spec §3).
+func RunService(name string, cfg Config, now func() time.Time) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	pipe := NewPipeServer(samplePipeName)
+	sp := NewSpawner(exe, cfg.IdleThresholdSeconds, pipe)
+	h := &serviceHandler{
+		run:           composeServiceRun(cfg, now, pipe, sp),
+		sessionChange: sp.Poke,
+	}
+	return svc.Run(name, h)
 }
 
 // Execute implements svc.Handler. It reports StartPending, then Running, and
@@ -45,7 +67,7 @@ func (h *serviceHandler) Execute(args []string, req <-chan svc.ChangeRequest, st
 	errCh := make(chan error, 1)
 	go func() { errCh <- h.run(ctx) }()
 
-	status <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
+	status <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown | svc.AcceptSessionChange}
 
 	for {
 		select {
@@ -63,6 +85,10 @@ func (h *serviceHandler) Execute(args []string, req <-chan svc.ChangeRequest, st
 			switch c.Cmd {
 			case svc.Interrogate:
 				status <- c.CurrentStatus
+			case svc.SessionChange:
+				if h.sessionChange != nil {
+					h.sessionChange()
+				}
 			case svc.Stop, svc.Shutdown:
 				status <- svc.Status{State: svc.StopPending}
 				cancel()
