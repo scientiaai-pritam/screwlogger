@@ -127,6 +127,10 @@ tbody tr:last-child td { border-bottom: none; }
 td.empty { color: var(--muted); text-align: center; padding: 28px; }
 .actions { text-align: right; white-space: nowrap; }
 
+/* ---------- Inline device rename ---------- */
+.dev-name input { width: 10rem; }
+.dev-name button { padding: 4px 10px; margin-left: 6px; }
+
 /* ---------- Status badges ---------- */
 .badge {
   display: inline-block;

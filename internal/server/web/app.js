@@ -168,18 +168,69 @@
       devices.forEach(function (d) {
         var tr = document.createElement("tr");
         tr.innerHTML =
-          "<td>" + esc(d.name) + "</td>" +
+          '<td class="dev-name">' + esc(d.name) + "</td>" +
           "<td>" + esc(fmtTs(d.last_seen)) + "</td>" +
           "<td>" + statusBadge(d.status) + "</td>" +
           '<td class="actions"></td>';
+        var cell = tr.querySelector("td.actions");
+        var ren = document.createElement("button");
+        ren.textContent = "Rename";
+        ren.addEventListener("click", function () { startRename(tr, d); });
+        cell.appendChild(ren);
         var btn = document.createElement("button");
         btn.className = "danger";
         btn.textContent = "Revoke";
         btn.disabled = d.status === "revoked";
         btn.addEventListener("click", function () { revokeDevice(d.id, d.name); });
-        tr.querySelector("td.actions").appendChild(btn);
+        cell.appendChild(btn);
         tbody.appendChild(tr);
       });
+    });
+  }
+
+  // Inline rename: swaps the name cell for an input + Save/Cancel until the
+  // edit is committed, cancelled, or the table reloads.
+  function startRename(tr, d) {
+    var td = tr.querySelector("td.dev-name");
+    if (!td || td.querySelector("input")) return; // already editing this row
+    td.textContent = "";
+    var input = document.createElement("input");
+    input.type = "text";
+    input.value = d.name;
+    input.maxLength = 128;
+    var save = document.createElement("button");
+    save.className = "primary";
+    save.textContent = "Save";
+    var cancel = document.createElement("button");
+    cancel.className = "ghost";
+    cancel.textContent = "Cancel";
+    td.appendChild(input);
+    td.appendChild(save);
+    td.appendChild(cancel);
+    input.focus();
+    input.select();
+
+    var done = false;
+    function finish() {
+      if (done) return;
+      done = true;
+      loadDevices();
+    }
+    function submit() {
+      var name = input.value.trim();
+      if (!name || name === d.name) { finish(); return; }
+      api("/admin/api/devices/" + encodeURIComponent(d.id) + "/name", { method: "PUT", body: { name: name } })
+        .then(function (res) {
+          if (!authed(res)) return;
+          toast("Device renamed");
+          finish();
+        });
+    }
+    save.addEventListener("click", submit);
+    cancel.addEventListener("click", finish);
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") submit();
+      if (e.key === "Escape") finish();
     });
   }
 
