@@ -79,6 +79,36 @@ func TestListDevices(t *testing.T) {
 	}
 }
 
+func TestRenameDevice(t *testing.T) {
+	s := openTestStore(t)
+	id, token, err := s.CreateDevice("PC-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RenameDevice(id, "Komal"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.ListDevices()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Name != "Komal" {
+		t.Fatalf("rename did not persist: %+v", rows)
+	}
+	// Rename is display-only: the token must keep resolving to the same device.
+	got, err := s.DeviceIDByToken(token)
+	if err != nil || got != id {
+		t.Fatalf("token broken after rename: id=%s err=%v", got, err)
+	}
+}
+
+func TestRenameDeviceUnknownID(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.RenameDevice("deadbeef", "X"); !errors.Is(err, server.ErrUnknownDevice) {
+		t.Fatalf("want ErrUnknownDevice, got %v", err)
+	}
+}
+
 func TestDeviceTokenAuth(t *testing.T) {
 	s := openTestStore(t)
 	devID, token, err := s.CreateDevice("PC-02")

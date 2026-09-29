@@ -20,6 +20,9 @@ var ErrRevoked = errors.New("device token revoked")
 // ErrUnknownToken is returned when a token matches no enrolled device.
 var ErrUnknownToken = errors.New("unknown device token")
 
+// ErrUnknownDevice is returned when a device ID matches no enrolled device.
+var ErrUnknownDevice = errors.New("unknown device")
+
 const schema = `
 CREATE TABLE IF NOT EXISTS devices (
   id TEXT PRIMARY KEY,
@@ -153,6 +156,21 @@ func (s *Store) DeviceIDByToken(token string) (string, error) {
 func (s *Store) RevokeDevice(deviceID string) error {
 	_, err := s.db.Exec(`UPDATE devices SET revoked_at = ? WHERE id = ?`, time.Now().Unix(), deviceID)
 	return err
+}
+
+// RenameDevice sets a device's display name (admin renames "PC-01" to the
+// operator's name after enrollment). Display-only metadata: the device ID and
+// token are untouched, so already-enrolled agents keep working unchanged.
+// Returns ErrUnknownDevice when the ID matches nothing.
+func (s *Store) RenameDevice(deviceID, name string) error {
+	res, err := s.db.Exec(`UPDATE devices SET name = ? WHERE id = ?`, name, deviceID)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return ErrUnknownDevice
+	}
+	return nil
 }
 
 // DeviceRow is one enrolled device for admin listing.
