@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -153,8 +154,12 @@ var (
 )
 
 // spawnWatcherProcess launches exe with args in the token's session and with
-// no window (spec §2, §4.2). The child is not tracked: pipe-connection state
-// drives reconciliation, so its handles are closed immediately.
+// no window (spec §2, §4.2). The child is not tracked by PID — pipe-connection
+// state drives reconciliation — but it IS placed in the service's kill-on-close
+// job object: when the service process exits (stop, crash, -upgrade), the job
+// handle closes and the watcher dies with it. Without that, the previous
+// generation's watcher survives a restart, redials the new pipe, and fights
+// the new watcher (newest-wins flapping) — observed live during Task 7.
 func spawnWatcherProcess(tok windows.Token, exe string, args []string) error {
 	env, err := createEnvironmentBlock(tok)
 	if err != nil {
@@ -166,24 +171,84 @@ func spawnWatcherProcess(tok windows.Token, exe string, args []string) error {
 	for _, a := range args {
 		line += " " + syscall.EscapeArg(a)
 	}
-	cl, err := windows.UTF16PtrFromString(line)
+	job, err := getWatcherJob()
 	if err != nil {
-		return err
+		return fmt.Errorf("watcher job object: %w", err)
 	}
-	exePtr, err := windows.UTF16PtrFromString(exe)
+	pi, err := spawnIntoJob(tok, exe, line, env, job)
 	if err != nil {
-		return err
-	}
-	si := &windows.StartupInfo{Cb: uint32(unsafe.Sizeof(windows.StartupInfo{}))}
-	var pi windows.ProcessInformation
-	if err := windows.CreateProcessAsUser(tok, exePtr, cl, nil, nil, false,
-		windows.CREATE_UNICODE_ENVIRONMENT|windows.CREATE_NO_WINDOW,
-		env, nil, si, &pi); err != nil {
 		return err
 	}
 	windows.CloseHandle(pi.Process)
 	windows.CloseHandle(pi.Thread)
 	return nil
+}
+
+var (
+	watcherJobOnce sync.Once
+	watcherJob     windows.Handle
+	watcherJobErr  error
+)
+
+// getWatcherJob lazily creates the per-service-process job object. The handle
+// lives for the process's lifetime; the OS closes it on any exit path, which
+// is what kills the watchers.
+func getWatcherJob() (windows.Handle, error) {
+	watcherJobOnce.Do(func() {
+		watcherJob, watcherJobErr = createKillOnCloseJob()
+		if watcherJobErr != nil {
+			log.Printf("spawner: kill-on-close job unavailable: %v", watcherJobErr)
+		}
+	})
+	return watcherJob, watcherJobErr
+}
+
+// createKillOnCloseJob returns a job object handle that terminates every
+// process in it when the handle is closed.
+func createKillOnCloseJob() (windows.Handle, error) {
+	h, err := windows.CreateJobObject(nil, nil)
+	if err != nil {
+		return 0, err
+	}
+	li := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{}
+	li.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+	if _, err := windows.SetInformationJobObject(h, windows.JobObjectExtendedLimitInformation,
+		uintptr(unsafe.Pointer(&li)), uint32(unsafe.Sizeof(li))); err != nil {
+		windows.CloseHandle(h)
+		return 0, err
+	}
+	return h, nil
+}
+
+// spawnIntoJob creates exe under tok as a suspended child, assigns it to job,
+// and resumes it. The suspend-assign-resume order closes the race where a
+// just-created child could outlive a service that dies mid-spawn: an
+// unassigned child is still suspended, and a failure after creation
+// terminates it rather than leaking it.
+func spawnIntoJob(tok windows.Token, exe, cmdLine string, env *uint16, job windows.Handle) (windows.ProcessInformation, error) {
+	cl, err := windows.UTF16PtrFromString(cmdLine)
+	if err != nil {
+		return windows.ProcessInformation{}, err
+	}
+	exePtr, err := windows.UTF16PtrFromString(exe)
+	if err != nil {
+		return windows.ProcessInformation{}, err
+	}
+	si := &windows.StartupInfo{Cb: uint32(unsafe.Sizeof(windows.StartupInfo{}))}
+	var pi windows.ProcessInformation
+	if err := windows.CreateProcessAsUser(tok, exePtr, cl, nil, nil, false,
+		windows.CREATE_UNICODE_ENVIRONMENT|windows.CREATE_NO_WINDOW|windows.CREATE_SUSPENDED,
+		env, nil, si, &pi); err != nil {
+		return windows.ProcessInformation{}, err
+	}
+	if err := windows.AssignProcessToJobObject(job, pi.Process); err != nil {
+		windows.TerminateProcess(pi.Process, 1)
+		windows.CloseHandle(pi.Thread)
+		windows.CloseHandle(pi.Process)
+		return windows.ProcessInformation{}, fmt.Errorf("assign to job: %w", err)
+	}
+	windows.ResumeThread(pi.Thread)
+	return pi, nil
 }
 
 // createEnvironmentBlock builds the user's environment (TEMP, APPDATA, …).
