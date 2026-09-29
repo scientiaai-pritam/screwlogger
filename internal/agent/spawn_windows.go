@@ -96,34 +96,38 @@ func (s *Spawner) Run(ctx context.Context) {
 }
 
 func (s *Spawner) reconcile() {
-	if s.Pipe.Connected() {
-		s.ladderIdx = 0 // a watcher is attached; ladder resets
-		s.nextAttempt = time.Time{}
-		return
-	}
 	sid := s.ConsoleSession()
 	if sid == noConsoleSession || sid == 0 {
 		return // nobody on the console: ship nothing (spec §5)
 	}
-	now := s.Now()
-	if now.Before(s.nextAttempt) {
-		return
-	}
 	tok, err := s.QueryToken(sid)
 	if err != nil {
 		log.Printf("spawner: query token for session %d: %v", sid, err)
-		s.consumeLadder(now)
+		s.consumeLadder(s.Now())
 		return
 	}
 	defer tok.Close()
 	sidStr, err := s.TokenUser(tok)
 	if err != nil {
 		log.Printf("spawner: token user: %v", err)
-		s.consumeLadder(now)
+		s.consumeLadder(s.Now())
 		return
 	}
-	// Grant the session user pipe-write access before the watcher exists.
+	// Grant the session user pipe-write access on every reconcile, not only
+	// on the spawn path: while a watcher is attached it is a no-op, but on a
+	// fast user switch it drops the previous user's still-attached watcher
+	// (self-paused before its write, so the pipe never reports a failure),
+	// which is what unblocks the spawn below for the new console user.
 	s.Pipe.EnsureSDDL(sidStr)
+	now := s.Now()
+	if s.Pipe.Connected() {
+		s.ladderIdx = 0 // a watcher is attached; ladder resets
+		s.nextAttempt = time.Time{}
+		return
+	}
+	if now.Before(s.nextAttempt) {
+		return
+	}
 	if err := s.Spawn(tok, s.ExePath, []string{"-userwatch", "-idle", fmt.Sprintf("%d", s.IdleSeconds)}); err != nil {
 		log.Printf("spawner: launch watcher: %v", err)
 	}
