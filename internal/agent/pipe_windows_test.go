@@ -7,14 +7,22 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"golang.org/x/sys/windows"
 )
 
+var testPipeCounter atomic.Int64
+
 func testPipeName() string {
-	return fmt.Sprintf(`\\.\pipe\monsvc-test-%d-%d`, os.Getpid(), time.Now().UnixNano()%1_000_000)
+	// A process-lifetime counter, not a clock derivative: stress runs repeat
+	// this file hundreds of times per process, and every call must get a pipe
+	// name no earlier test in the same process has ever used (a reused name
+	// would let a dial attach to a prior test's still-tearing-down server).
+	n := testPipeCounter.Add(1)
+	return fmt.Sprintf(`\\.\pipe\monsvc-test-%d-%d`, os.Getpid(), n)
 }
 
 // currentUserSID returns the test process token's user SID.
@@ -59,6 +67,43 @@ func readSample(t *testing.T, out <-chan Sample) Sample {
 		t.Fatal("no sample within 5s")
 		return Sample{}
 	}
+}
+
+// dialVerifiedPipe connects like the production watcher actually does and
+// keeps the connection only once a sample has flowed end-to-end. CreateFile
+// success alone is provisional: an NPFS instance accepts client opens the
+// moment it exists — before any ConnectNamedPipe call — so a dial landing
+// while the server recovers from a DACL change can attach to the very
+// instance EnsureSDDL is about to disconnect (a ~µs window, observed once in
+// ~50 stress iterations). The client then holds a dead handle; the only
+// recovery is to re-dial (watcher_windows.go does exactly this on write
+// failure). Convergence within the budget is the contract.
+func dialVerifiedPipe(t *testing.T, name string, out <-chan Sample) io.WriteCloser {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		c := dialPipe(t, name)
+		s := Sample{App: "probe.exe", Active: true}
+		if _, err := c.Write(EncodeSample(s)); err != nil {
+			c.Close()
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
+		// The write can succeed once into an OS buffer even on a connection
+		// the server just dropped (see TestPipeNewestWins), so delivery, not
+		// write success, proves the connection stuck.
+		select {
+		case got := <-out:
+			if got.App != s.App {
+				t.Fatalf("sample = %+v, want %s", got, s.App)
+			}
+			return c
+		case <-time.After(500 * time.Millisecond):
+			c.Close()
+		}
+	}
+	t.Fatal("no working pipe connection within 2s")
+	return nil
 }
 
 func waitConnected(t *testing.T, p *PipeServer, want bool) {
@@ -152,8 +197,8 @@ func TestPipeNewestWins(t *testing.T) {
 }
 
 func TestPipeEnsureSDDLDropsClient(t *testing.T) {
-	p, _, name := startTestPipe(t)
-	_ = dialPipe(t, name)
+	p, out, name := startTestPipe(t)
+	c1 := dialPipe(t, name)
 	waitConnected(t, p, true)
 
 	// A valid SID that is not ours: the DACL is replaced (not merged) and the
@@ -162,11 +207,11 @@ func TestPipeEnsureSDDLDropsClient(t *testing.T) {
 	// enforcement live.)
 	p.EnsureSDDL("S-1-5-99-12345")
 	waitConnected(t, p, false)
+	c1.Close() // client side of the dropped connection
 
-	// Granting our own SID again is a DACL change: the server recovers and
-	// accepts a new client under the new DACL.
+	// Granting our own SID again is a DACL change: the server recovers and a
+	// new client attaches — verified end-to-end, the way the watcher dials.
 	p.EnsureSDDL(currentUserSID(t))
-	c := dialPipe(t, name)
-	waitConnected(t, p, true)
-	_ = c
+	c := dialVerifiedPipe(t, name, out)
+	c.Close()
 }

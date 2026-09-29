@@ -30,12 +30,13 @@ const baseSD = "D:P(A;;GA;;;SY)(A;;GA;;;BA)"
 type PipeServer struct {
 	name string
 
-	mu        sync.Mutex
-	sddl      string
-	pending   windows.Handle // instance waiting in ConnectNamedPipe, 0 when none
-	client    io.ReadCloser
-	connected bool
-	dirty     bool // DACL changed; Serve must drop the pending instance
+	mu         sync.Mutex
+	sddl       string
+	pending    windows.Handle // instance waiting in ConnectNamedPipe, 0 when none
+	pendingGen uint64         // bumped each time pending is stored
+	client     io.ReadCloser
+	connected  bool
+	dirty      bool // DACL changed; Serve must drop the pending instance
 }
 
 // NewPipeServer creates the server; the DACL starts as baseSD (no user ACE)
@@ -76,9 +77,33 @@ func (p *PipeServer) EnsureSDDL(userSID string) {
 		p.client = nil
 	}
 	if p.pending != 0 {
-		// Unblocks ConnectNamedPipe; Serve closes the handle and recreates.
-		windows.CancelIoEx(p.pending, nil)
+		p.dropPendingLocked()
 	}
+}
+
+// dropPendingLocked interrupts the pending ConnectNamedPipe until Serve has
+// consumed the instance (p.pending cleared or replaced — pendingGen changes).
+// A single CancelIoEx can be a no-op if it lands before the connect goroutine
+// has issued the call, which would leave Serve blocked in ConnectNamedPipe on
+// an instance no client can open (stale DACL), so the cancel repeats, bounded.
+// The check and the cancel share one lock hold, and Serve closes pending
+// handles only after popping them under mu, so the captured handle stays
+// valid for the whole loop. Caller holds p.mu; it is dropped while sleeping.
+func (p *PipeServer) dropPendingLocked() {
+	h, gen := p.pending, p.pendingGen
+	if h == 0 {
+		return
+	}
+	for i := 0; i < 100; i++ {
+		windows.CancelIoEx(h, nil)
+		p.mu.Unlock()
+		time.Sleep(5 * time.Millisecond)
+		p.mu.Lock()
+		if p.pending == 0 || p.pendingGen != gen {
+			return
+		}
+	}
+	log.Printf("pipe: pending connect did not observe cancel")
 }
 
 // Serve accepts clients until ctx is cancelled, publishing decoded samples
@@ -114,6 +139,7 @@ func (p *PipeServer) Serve(ctx context.Context, out chan<- Sample) {
 			h := p.pending
 			p.pending = 0
 			p.mu.Unlock()
+			windows.DisconnectNamedPipe(h)
 			windows.CloseHandle(h)
 		}
 		pending := p.pendingHandle()
@@ -132,16 +158,39 @@ func (p *PipeServer) Serve(ctx context.Context, out chan<- Sample) {
 			p.mu.Lock()
 			if p.dirty {
 				p.mu.Unlock()
+				windows.DisconnectNamedPipe(h)
 				windows.CloseHandle(h)
 				continue
 			}
+			p.pendingGen++
 			p.pending = h
 			p.mu.Unlock()
 			pending = h
 		}
 
 		connCh := make(chan error, 1)
-		go func() { connCh <- windows.ConnectNamedPipe(pending, nil) }()
+		go func() {
+			// The instance is an overlapped handle (FILE_FLAG_OVERLAPPED):
+			// Go's os.File reads on it are cancellable by CancelIoEx, which
+			// is what lets EnsureSDDL's client.Close() evict a parked read
+			// instead of deadlocking on it (a blocking sync-mode read can
+			// only be broken by the peer or the handle itself). The connect
+			// call must therefore carry an OVERLAPPED too; GetOverlappedResult
+			// blocks until a client lands or the cancel completes it.
+			ev, err := windows.CreateEvent(nil, 1, 0, nil)
+			if err != nil {
+				connCh <- err
+				return
+			}
+			defer windows.CloseHandle(ev)
+			ol := &windows.Overlapped{HEvent: ev}
+			err = windows.ConnectNamedPipe(pending, ol)
+			if err == windows.ERROR_IO_PENDING {
+				var n uint32
+				err = windows.GetOverlappedResult(pending, ol, &n, true)
+			}
+			connCh <- err
+		}()
 		var connErr error
 		select {
 		case <-ctx.Done():
@@ -149,6 +198,7 @@ func (p *PipeServer) Serve(ctx context.Context, out chan<- Sample) {
 			p.mu.Lock()
 			p.pending = 0
 			p.mu.Unlock()
+			windows.DisconnectNamedPipe(pending)
 			windows.CloseHandle(pending)
 			return
 		case connErr = <-connCh:
@@ -157,8 +207,15 @@ func (p *PipeServer) Serve(ctx context.Context, out chan<- Sample) {
 		p.pending = 0
 		p.mu.Unlock()
 
-		if connErr != nil {
-			windows.CloseHandle(pending) // no connection; discard the instance
+		if connErr != nil && connErr != windows.ERROR_PIPE_CONNECTED {
+			// ERROR_PIPE_CONNECTED means the client dialed before the
+			// ConnectNamedPipe call was issued: the connection exists and is
+			// accepted below. Anything else discarded the instance.
+			// Disconnect first: the instance stays open until CloseHandle, and
+			// a dial landing in between would attach to a connection that is
+			// about to be killed.
+			windows.DisconnectNamedPipe(pending)
+			windows.CloseHandle(pending)
 			if ctx.Err() != nil {
 				return
 			}
@@ -234,7 +291,7 @@ func createPipeInstance(name, sddl string) (windows.Handle, error) {
 		SecurityDescriptor: sd,
 	}
 	h, err := windows.CreateNamedPipe(windows.StringToUTF16Ptr(name),
-		windows.PIPE_ACCESS_INBOUND,
+		windows.PIPE_ACCESS_INBOUND|windows.FILE_FLAG_OVERLAPPED,
 		windows.PIPE_TYPE_BYTE|windows.PIPE_READMODE_BYTE|windows.PIPE_WAIT,
 		windows.PIPE_UNLIMITED_INSTANCES, 512, 512, 0, sa)
 	if err != nil {
