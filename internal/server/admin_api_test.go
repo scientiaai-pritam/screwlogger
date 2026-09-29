@@ -439,7 +439,8 @@ func TestAdminDeleteRevokedDevice(t *testing.T) {
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("device must be gone: rows=%+v err=%v", rows, err)
 	}
-	// The deleted device's token must no longer ingest at all.
+	// The deleted device's token must no longer ingest at all — the row is
+	// gone, so it is an unknown token (401), not a revoked one (403).
 	ingest := server.IngestHandler(s)
 	body, _ := json.Marshal(protocol.IngestBatch{
 		SchemaVersion: protocol.SchemaVersion,
@@ -450,8 +451,8 @@ func TestAdminDeleteRevokedDevice(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	iw := httptest.NewRecorder()
 	ingest.ServeHTTP(iw, req)
-	if iw.Code != http.StatusForbidden {
-		t.Fatalf("deleted device token: want 403, got %d (%s)", iw.Code, iw.Body.String())
+	if iw.Code != http.StatusUnauthorized {
+		t.Fatalf("deleted device token: want 401, got %d (%s)", iw.Code, iw.Body.String())
 	}
 }
 
