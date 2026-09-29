@@ -2,8 +2,11 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
+	"strings"
+	"unicode/utf8"
 )
 
 // AdminAPI returns the admin JSON API (every /admin/api/* route), protected by
@@ -15,6 +18,7 @@ func AdminAPI(store *Store, auth *AdminAuth) http.Handler {
 	api.HandleFunc("POST /admin/api/devices", handleDeviceEnroll(store))
 	api.HandleFunc("GET /admin/api/devices", handleDevices(store))
 	api.HandleFunc("POST /admin/api/devices/{id}/revoke", handleDeviceRevoke(store))
+	api.HandleFunc("PUT /admin/api/devices/{id}/name", handleDeviceRename(store))
 	api.HandleFunc("GET /admin/api/rules", handleRulesList(store))
 	api.HandleFunc("PUT /admin/api/rules", handleRuleUpsert(store))
 	api.HandleFunc("DELETE /admin/api/rules", handleRuleDelete(store))
@@ -58,6 +62,41 @@ func handleDeviceRevoke(store *Store) http.HandlerFunc {
 		id := r.PathValue("id")
 		if err := store.RevokeDevice(id); err != nil {
 			log.Printf("admin api: revoke device %s: %v", id, err)
+			writeErr(w, http.StatusInternalServerError, "storage error")
+			return
+		}
+		writeJSON(w, map[string]bool{"ok": true})
+	}
+}
+
+// maxDeviceNameLen caps display names in runes.
+const maxDeviceNameLen = 128
+
+func handleDeviceRename(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeErr(w, http.StatusBadRequest, "malformed JSON body")
+			return
+		}
+		name := strings.TrimSpace(body.Name)
+		if name == "" {
+			writeErr(w, http.StatusBadRequest, "name must not be empty")
+			return
+		}
+		if utf8.RuneCountInString(name) > maxDeviceNameLen {
+			writeErr(w, http.StatusBadRequest, "name too long (max 128 characters)")
+			return
+		}
+		id := r.PathValue("id")
+		if err := store.RenameDevice(id, name); err != nil {
+			if errors.Is(err, ErrUnknownDevice) {
+				writeErr(w, http.StatusNotFound, "unknown device")
+				return
+			}
+			log.Printf("admin api: rename device %s: %v", id, err)
 			writeErr(w, http.StatusInternalServerError, "storage error")
 			return
 		}

@@ -71,6 +71,7 @@ func TestAdminAPIRequiresSession(t *testing.T) {
 		{"POST", "/admin/api/devices"},
 		{"GET", "/admin/api/devices"},
 		{"POST", "/admin/api/devices/someid/revoke"},
+		{"PUT", "/admin/api/devices/someid/name"},
 		{"GET", "/admin/api/rules"},
 		{"PUT", "/admin/api/rules"},
 		{"DELETE", "/admin/api/rules"},
@@ -342,5 +343,76 @@ func TestAdminKeyRevokeUnknown(t *testing.T) {
 	rw := adminReq(h, "POST", "/admin/api/keys/deadbeef/revoke", cookie, nil)
 	if rw.Code != http.StatusNotFound {
 		t.Fatalf("unknown prefix: want 404, got %d (%s)", rw.Code, rw.Body.String())
+	}
+}
+
+func TestAdminRenameDevice(t *testing.T) {
+	s, auth, h := adminAPI(t)
+	cookie := adminLogin(t, auth, "s3cret")
+
+	w := adminReq(h, "POST", "/admin/api/devices", cookie, map[string]string{"name": "PC-4"})
+	var enrolled struct {
+		DeviceID string `json:"device_id"`
+		Token    string `json:"token"`
+	}
+	decodeJSON(t, w, &enrolled)
+
+	rw := adminReq(h, "PUT", "/admin/api/devices/"+enrolled.DeviceID+"/name", cookie, map[string]string{"name": "Komal"})
+	if rw.Code != http.StatusOK {
+		t.Fatalf("rename: want 200, got %d (%s)", rw.Code, rw.Body.String())
+	}
+	rows, err := s.ListDevices()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Name != "Komal" {
+		t.Fatalf("rename did not persist: %+v", rows)
+	}
+
+	// The renamed device's token must still ingest (rename is display-only).
+	ingest := server.IngestHandler(s)
+	body, _ := json.Marshal(protocol.IngestBatch{
+		SchemaVersion: protocol.SchemaVersion,
+		Heartbeats:    []protocol.Heartbeat{{ID: "h1", TS: 1000, App: "excel.exe", Category: "Office", Active: true}},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/ingest", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+enrolled.Token)
+	iw := httptest.NewRecorder()
+	ingest.ServeHTTP(iw, req)
+	if iw.Code != http.StatusOK {
+		t.Fatalf("ingest after rename: want 200, got %d (%s)", iw.Code, iw.Body.String())
+	}
+}
+
+func TestAdminRenameDeviceValidation(t *testing.T) {
+	s, auth, h := adminAPI(t)
+	cookie := adminLogin(t, auth, "s3cret")
+
+	id, _, err := s.CreateDevice("PC-4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name   string
+		device string
+		body   map[string]string
+		want   int
+	}{
+		{"empty name", id, map[string]string{"name": ""}, http.StatusBadRequest},
+		{"whitespace name", id, map[string]string{"name": "   "}, http.StatusBadRequest},
+		{"over 128 chars", id, map[string]string{"name": strings.Repeat("x", 129)}, http.StatusBadRequest},
+		{"unknown device", "nosuchdevice", map[string]string{"name": "Komal"}, http.StatusNotFound},
+	}
+	for _, c := range cases {
+		w := adminReq(h, "PUT", "/admin/api/devices/"+c.device+"/name", cookie, c.body)
+		if w.Code != c.want {
+			t.Fatalf("%s: want %d, got %d (%s)", c.name, c.want, w.Code, w.Body.String())
+		}
+	}
+	// None of the failed attempts may have changed the stored name.
+	rows, err := s.ListDevices()
+	if err != nil || len(rows) != 1 || rows[0].Name != "PC-4" {
+		t.Fatalf("failed renames must not persist: %+v err=%v", rows, err)
 	}
 }
