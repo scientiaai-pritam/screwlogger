@@ -45,6 +45,7 @@ func RunService(name string, cfg Config, now func() time.Time) error {
 	if err != nil {
 		return err
 	}
+	log.Printf("service starting (exe=%s idle=%ds)", exe, cfg.IdleThresholdSeconds)
 	pipe := NewPipeServer(samplePipeName)
 	sp := NewSpawner(exe, cfg.IdleThresholdSeconds, pipe)
 	h := &serviceHandler{
@@ -68,6 +69,7 @@ func (h *serviceHandler) Execute(args []string, req <-chan svc.ChangeRequest, st
 	go func() { errCh <- h.run(ctx) }()
 
 	status <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown | svc.AcceptSessionChange}
+	log.Printf("service running")
 
 	for {
 		select {
@@ -90,6 +92,7 @@ func (h *serviceHandler) Execute(args []string, req <-chan svc.ChangeRequest, st
 					h.sessionChange()
 				}
 			case svc.Stop, svc.Shutdown:
+				log.Printf("stop requested")
 				status <- svc.Status{State: svc.StopPending}
 				cancel()
 				select {

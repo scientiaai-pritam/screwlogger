@@ -73,8 +73,14 @@ func runConsole(cfgPath string) {
 
 // runService is the production path, invoked by the SCM. Config is read from
 // agent.yaml next to the binary, not from -config. The service spawns the
-// in-session watcher and ships its samples (spec §3).
+// in-session watcher and ships its samples (spec §3). The event-log sink is
+// installed before config load: a boot-time config failure must reach the
+// event log, not a stderr no service has.
 func runService() {
+	if sink, err := agent.NewEventLogSink("monsvc"); err == nil {
+		defer sink.Close()
+		log.SetOutput(sink)
+	}
 	exe, _ := os.Executable()
 	cfg, err := agent.LoadConfig(filepath.Join(filepath.Dir(exe), "agent.yaml"))
 	if err != nil {

@@ -5,11 +5,57 @@ package agent
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 )
+
+// TestExecuteLogsLifecycle pins the service's own trail: the event log must
+// show that the service came up and that a stop was requested, or a silent PC
+// cannot be told apart from a never-started one.
+func TestExecuteLogsLifecycle(t *testing.T) {
+	buf := captureLogs(t)
+	h := &serviceHandler{run: func(ctx context.Context) error {
+		<-ctx.Done()
+		return nil
+	}}
+	reqCh := make(chan svc.ChangeRequest)
+	statusCh := make(chan svc.Status, 8)
+	done := make(chan struct{})
+	go func() { h.Execute(nil, reqCh, statusCh); close(done) }()
+	<-statusCh // StartPending
+	<-statusCh // Running
+
+	reqCh <- svc.ChangeRequest{Cmd: svc.Stop}
+	<-done
+
+	out := buf.String()
+	if !strings.Contains(out, "service running") {
+		t.Fatalf("log missing \"service running\":\n%s", out)
+	}
+	if !strings.Contains(out, "stop requested") {
+		t.Fatalf("log missing \"stop requested\":\n%s", out)
+	}
+}
+
+// RunService narrates its startup before handing control to the SCM — on a
+// normal box svc.Run fails fast with the service-controller-connect error,
+// which also makes this testable without a real service.
+func TestRunServiceLogsStart(t *testing.T) {
+	buf := captureLogs(t)
+
+	cfg := Config{ServerURL: "http://127.0.0.1:8998", IdleThresholdSeconds: 180}
+	if err := RunService("monsvc-selftest-not-a-service", cfg, time.Now); err == nil {
+		t.Fatal("RunService on a non-service process should fail")
+	}
+
+	if !strings.Contains(buf.String(), "service starting") {
+		t.Fatalf("log missing \"service starting\":\n%s", buf.String())
+	}
+}
 
 // execResult wraps the Execute return tuple so it can be read from a channel
 // without a goroutine writing two values into the same select.
@@ -19,6 +65,7 @@ type execResult struct {
 }
 
 func TestExecuteGracefulStop(t *testing.T) {
+	captureLogs(t)
 	h := &serviceHandler{run: func(ctx context.Context) error {
 		<-ctx.Done()
 		return nil
@@ -63,6 +110,7 @@ func TestExecuteGracefulStop(t *testing.T) {
 // driveExecute starts Execute with the given run and returns its exit tuple.
 func driveExecute(t *testing.T, run func(context.Context) error) execResult {
 	t.Helper()
+	captureLogs(t) // Execute narrates its lifecycle; keep the suite output clean
 	h := &serviceHandler{run: run}
 	reqCh := make(chan svc.ChangeRequest)
 	statusCh := make(chan svc.Status, 8) // buffered so handler sends never block
@@ -93,6 +141,7 @@ func TestExecuteCleanExitStillNonzero(t *testing.T) {
 }
 
 func TestExecuteSessionChangePokes(t *testing.T) {
+	captureLogs(t)
 	pokes := 0
 	h := &serviceHandler{
 		run:           func(ctx context.Context) error { <-ctx.Done(); return nil },
