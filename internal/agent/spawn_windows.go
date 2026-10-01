@@ -46,6 +46,14 @@ type Spawner struct {
 	nextAttempt time.Time
 	ladderIdx   int
 	poke        chan struct{}
+
+	// Diagnostic state: transitions are logged once each, and a repeating
+	// error (a service parked at the login screen) is logged once per
+	// distinct message. The event log is the only record a service leaves,
+	// so reconcile narrates what it saw.
+	hadSession bool
+	hadWatcher bool
+	lastErrLog string
 }
 
 // NewSpawner fills production collaborators; tests override fields.
@@ -98,18 +106,28 @@ func (s *Spawner) Run(ctx context.Context) {
 func (s *Spawner) reconcile() {
 	sid := s.ConsoleSession()
 	if sid == noConsoleSession || sid == 0 {
+		if s.hadSession {
+			s.hadSession = false
+			log.Printf("spawner: console session gone")
+		} else {
+			s.logChanged("spawner: no console session (waiting for logon)")
+		}
 		return // nobody on the console: ship nothing (spec §5)
+	}
+	if !s.hadSession {
+		s.hadSession = true
+		log.Printf("spawner: console session appeared (sid=%d)", sid)
 	}
 	tok, err := s.QueryToken(sid)
 	if err != nil {
-		log.Printf("spawner: query token for session %d: %v", sid, err)
+		s.logChanged(fmt.Sprintf("spawner: query token for session %d: %v", sid, err))
 		s.consumeLadder(s.Now())
 		return
 	}
 	defer tok.Close()
 	sidStr, err := s.TokenUser(tok)
 	if err != nil {
-		log.Printf("spawner: token user: %v", err)
+		s.logChanged(fmt.Sprintf("spawner: token user: %v", err))
 		s.consumeLadder(s.Now())
 		return
 	}
@@ -120,7 +138,16 @@ func (s *Spawner) reconcile() {
 	// which is what unblocks the spawn below for the new console user.
 	s.Pipe.EnsureSDDL(sidStr)
 	now := s.Now()
-	if s.Pipe.Connected() {
+	connected := s.Pipe.Connected()
+	if connected != s.hadWatcher {
+		s.hadWatcher = connected
+		if connected {
+			log.Printf("spawner: watcher attached (user %s)", sidStr)
+		} else {
+			log.Printf("spawner: watcher gone (respawning)")
+		}
+	}
+	if connected {
 		s.ladderIdx = 0 // a watcher is attached; ladder resets
 		s.nextAttempt = time.Time{}
 		return
@@ -129,9 +156,22 @@ func (s *Spawner) reconcile() {
 		return
 	}
 	if err := s.Spawn(tok, s.ExePath, []string{"-userwatch", "-idle", fmt.Sprintf("%d", s.IdleSeconds)}); err != nil {
-		log.Printf("spawner: launch watcher: %v", err)
+		s.logChanged(fmt.Sprintf("spawner: launch watcher: %v", err))
+	} else {
+		log.Printf("spawner: launched watcher for session %d (user %s)", sid, sidStr)
 	}
 	s.consumeLadder(now)
+}
+
+// logChanged logs msg unless it is identical to the last logged line: a
+// service waiting out the respawn ladder at the login screen would otherwise
+// repeat the same failure every 30s for as long as nobody logs on.
+func (s *Spawner) logChanged(msg string) {
+	if msg == s.lastErrLog {
+		return
+	}
+	s.lastErrLog = msg
+	log.Print(msg)
 }
 
 // consumeLadder schedules the next attempt per the backoff ladder.

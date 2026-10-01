@@ -3,13 +3,28 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"golang.org/x/sys/windows"
 )
+
+// captureLogs redirects the standard library log into a buffer for the test's
+// duration — the spawner's diagnostics ARE its observable behavior on a
+// silent PC, because the event log is the only record a service leaves.
+func captureLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	return &buf
+}
 
 type fakePipe struct {
 	connected bool
@@ -54,6 +69,7 @@ func newTestSpawner(fp *fakePipe, now func() time.Time, rs *recordingSpawner) *S
 }
 
 func TestSpawnerLaunchesWatcher(t *testing.T) {
+	captureLogs(t) // reconcile now narrates; keep the suite output clean
 	fp := &fakePipe{}
 	rs := &recordingSpawner{}
 	t0 := time.Unix(1_800_000_000, 0)
@@ -91,6 +107,86 @@ func TestSpawnerNoConsoleSession(t *testing.T) {
 	}
 }
 
+// A service that boots before logon must leave a readable trail: the event
+// log is the only witness to whether it saw the session, spawned a watcher,
+// and saw the watcher attach.
+func TestSpawnerLogsSessionTransitions(t *testing.T) {
+	buf := captureLogs(t)
+	fp := &fakePipe{}
+	rs := &recordingSpawner{}
+	s := newTestSpawner(fp, time.Now, rs)
+
+	s.ConsoleSession = func() uint32 { return noConsoleSession }
+	s.reconcile() // boot, nobody logged on
+	s.ConsoleSession = func() uint32 { return 7 }
+	s.reconcile() // the user logs in
+	s.ConsoleSession = func() uint32 { return noConsoleSession }
+	s.reconcile() // logoff
+
+	out := buf.String()
+	for _, want := range []string{"no console session", "session appeared", "session gone"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("log missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestSpawnerLogsWatcherAttachAndLaunch(t *testing.T) {
+	buf := captureLogs(t)
+	fp := &fakePipe{}
+	rs := &recordingSpawner{}
+	t0 := time.Unix(1_800_000_000, 0)
+	now := t0
+	s := newTestSpawner(fp, func() time.Time { return now }, rs)
+
+	s.reconcile() // spawns a watcher
+	if n := strings.Count(buf.String(), "launched watcher"); n != 1 {
+		t.Fatalf("launched-watcher lines = %d, want 1:\n%s", n, buf.String())
+	}
+	fp.connected = true
+	s.reconcile() // the watcher dials the pipe
+	if !strings.Contains(buf.String(), "watcher attached") {
+		t.Fatalf("log missing \"watcher attached\":\n%s", buf.String())
+	}
+	fp.connected = false
+	now = t0.Add(time.Second)
+	s.reconcile() // watcher gone, respawn attempt
+	out := buf.String()
+	if !strings.Contains(out, "watcher gone") {
+		t.Fatalf("log missing \"watcher gone\":\n%s", out)
+	}
+	if n := strings.Count(out, "launched watcher"); n != 2 {
+		t.Fatalf("launched-watcher lines = %d, want 2:\n%s", n, out)
+	}
+}
+
+// A service parked at the login screen repeats the same QueryToken failure
+// every ladder step; one copy in the event log is enough, and a CHANGED
+// error must be logged again.
+func TestSpawnerRepeatedIdenticalErrorsLogOnce(t *testing.T) {
+	buf := captureLogs(t)
+	fp := &fakePipe{}
+	rs := &recordingSpawner{}
+	now := time.Unix(1_800_000_000, 0)
+	s := newTestSpawner(fp, func() time.Time { return now }, rs)
+	queryErr := errors.New("access is denied")
+	s.QueryToken = func(uint32) (windows.Token, error) { return 0, queryErr }
+
+	s.reconcile()
+	s.reconcile()
+	s.reconcile()
+
+	if n := strings.Count(buf.String(), "query token for session"); n != 1 {
+		t.Fatalf("identical error logged %d times, want 1:\n%s", n, buf.String())
+	}
+
+	queryErr = errors.New("a different failure")
+	s.reconcile()
+	if n := strings.Count(buf.String(), "query token for session"); n != 2 {
+		t.Fatalf("changed error not logged again (count %d):\n%s", n, buf.String())
+	}
+}
+
 // While a watcher is attached, reconcile must still reach EnsureSDDL with the
 // console session's user SID: it is a no-op while the SID is unchanged (this
 // test) and drops the stale client on a fast user switch (the next test).
@@ -98,6 +194,7 @@ func TestSpawnerNoConsoleSession(t *testing.T) {
 // only EnsureSDDL call site sat behind a guard that is precisely true during
 // a fast user switch, so the new console user silently got zero heartbeats.
 func TestSpawnerConnectedShortCircuits(t *testing.T) {
+	captureLogs(t)
 	fp := &fakePipe{connected: true, sddl: testSID}
 	rs := &recordingSpawner{}
 	s := newTestSpawner(fp, time.Now, rs)
@@ -115,6 +212,7 @@ func TestSpawnerConnectedShortCircuits(t *testing.T) {
 }
 
 func TestSpawnerSessionUserChangeDropsAndRespawns(t *testing.T) {
+	captureLogs(t)
 	fp := &fakePipe{connected: true, sddl: testSID} // user A's watcher attached
 	rs := &recordingSpawner{}
 	s := newTestSpawner(fp, time.Now, rs)
