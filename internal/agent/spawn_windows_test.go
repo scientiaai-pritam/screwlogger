@@ -304,6 +304,66 @@ func TestSpawnerPokeIsNonBlocking(t *testing.T) {
 	}
 }
 
+// TestSpawnerBootSequencePinsPostLogonSpawn pins the boot contract for the
+// failing fleet path: a service that started before logon and ticked through
+// the login screen's failing QueryTokens for hours must still spawn a watcher
+// promptly after the user logs on, must not stay ladder-blocked, and must
+// narrate the whole sequence in the log — the login screen's repeats deduped
+// to one line.
+func TestSpawnerBootSequencePinsPostLogonSpawn(t *testing.T) {
+	buf := captureLogs(t)
+	fp := &fakePipe{}
+	rs := &recordingSpawner{}
+	boot := time.Unix(1_800_000_000, 0)
+	now := boot
+	logonAt := boot.Add(4 * time.Hour)
+	s := newTestSpawner(fp, func() time.Time { return now }, rs)
+
+	queryErr := errors.New("no user token")
+	s.QueryToken = func(uint32) (windows.Token, error) {
+		if now.Before(logonAt) {
+			return 0, queryErr // login screen: session up, no user yet
+		}
+		return windows.Token(0), nil
+	}
+	s.ConsoleSession = func() uint32 {
+		if now.Equal(boot) {
+			return noConsoleSession // first reconcile: session manager not up yet
+		}
+		return 1
+	}
+
+	s.reconcile() // boot
+	spawnedAt := time.Time{}
+	for now.Before(logonAt.Add(90 * time.Second)) {
+		now = now.Add(30 * time.Second)
+		s.reconcile()
+		if len(rs.spawns) > 0 && spawnedAt.IsZero() {
+			spawnedAt = now
+			fp.connected = true // the freshly spawned watcher dials the pipe
+		}
+	}
+
+	if len(rs.spawns) == 0 {
+		t.Fatal("no watcher spawned after logon")
+	}
+	if spawnedAt.After(logonAt.Add(30 * time.Second)) {
+		t.Fatalf("first spawn at %v, want within 30s of logon at %v", spawnedAt, logonAt)
+	}
+	out := buf.String()
+	for _, want := range []string{"no console session", "session appeared", "launched watcher"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("log missing %q:\n%s", want, out)
+		}
+	}
+	if n := strings.Count(out, "query token for session"); n != 1 {
+		t.Fatalf("login-screen failure logged %d times across ~480 ticks, want 1", n)
+	}
+	if s.ladderIdx != 0 {
+		t.Fatalf("ladderIdx = %d after attach, want 0", s.ladderIdx)
+	}
+}
+
 // TestSpawnIntoJobChildDiesWhenJobCloses pins the watcher lifecycle contract:
 // a child created by spawnIntoJob belongs to the job, so closing the job
 // handle kills it. This is what keeps a service restart or -upgrade from
