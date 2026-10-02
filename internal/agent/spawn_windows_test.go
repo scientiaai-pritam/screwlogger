@@ -423,6 +423,52 @@ func TestSpawnIntoJobChildDiesWhenJobCloses(t *testing.T) {
 	}
 }
 
+// TestGetWatcherJobRetriesAfterFailure pins the recovery contract for the
+// one fail-forever seat in the spawn chain: a job-object creation failure
+// (e.g. during an early-boot service start) must be retried on the next
+// spawn, not latched for the process lifetime. The latch was the prime
+// suspect for the fleet's per-boot silence.
+func TestGetWatcherJobRetriesAfterFailure(t *testing.T) {
+	captureLogs(t)
+	fail := errors.New("create job failed")
+	calls := 0
+	orig := createWatcherJob
+	var created windows.Handle
+	t.Cleanup(func() {
+		createWatcherJob = orig
+		if created != 0 {
+			windows.CloseHandle(created)
+		}
+		watcherJob = 0
+	})
+	createWatcherJob = func() (windows.Handle, error) {
+		calls++
+		if calls == 1 {
+			return 0, fail
+		}
+		return createKillOnCloseJob()
+	}
+	watcherJob = 0
+
+	if _, err := getWatcherJob(); !errors.Is(err, fail) {
+		t.Fatalf("first call error = %v, want %v", err, fail)
+	}
+	h, err := getWatcherJob()
+	if err != nil || h == 0 {
+		t.Fatalf("second call must succeed after a failed creation: h=%d err=%v", h, err)
+	}
+	created = h
+	if calls != 2 {
+		t.Fatalf("creation calls = %d, want 2", calls)
+	}
+	if h2, _ := getWatcherJob(); h2 != h {
+		t.Fatalf("third call returned a different handle: %d != %d", h2, h)
+	}
+	if calls != 2 {
+		t.Fatalf("cached handle was not reused: creation calls = %d, want 2", calls)
+	}
+}
+
 // systemCmdExe returns cmd.exe's full path.
 func systemCmdExe(t *testing.T) string {
 	t.Helper()

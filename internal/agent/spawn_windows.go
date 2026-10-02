@@ -228,23 +228,35 @@ func spawnWatcherProcess(tok windows.Token, exe string, args []string) error {
 	return nil
 }
 
+// createWatcherJob is the job-object factory; a var so tests can inject a
+// transient failure. A failure here must NOT latch: getWatcherJob retries on
+// the next spawn.
+var createWatcherJob = createKillOnCloseJob
+
 var (
-	watcherJobOnce sync.Once
-	watcherJob     windows.Handle
-	watcherJobErr  error
+	watcherJobMu sync.Mutex
+	watcherJob   windows.Handle
 )
 
 // getWatcherJob lazily creates the per-service-process job object. The handle
 // lives for the process's lifetime; the OS closes it on any exit path, which
-// is what kills the watchers.
+// is what kills the watchers. A creation failure (seen in the wild as a
+// boot-time service start) is returned to the caller and retried on the next
+// spawn — one bad moment at boot must not silence the service for its whole
+// uptime.
 func getWatcherJob() (windows.Handle, error) {
-	watcherJobOnce.Do(func() {
-		watcherJob, watcherJobErr = createKillOnCloseJob()
-		if watcherJobErr != nil {
-			log.Printf("spawner: kill-on-close job unavailable: %v", watcherJobErr)
-		}
-	})
-	return watcherJob, watcherJobErr
+	watcherJobMu.Lock()
+	defer watcherJobMu.Unlock()
+	if watcherJob != 0 {
+		return watcherJob, nil
+	}
+	h, err := createWatcherJob()
+	if err != nil {
+		log.Printf("spawner: watcher job create failed (retrying next spawn): %v", err)
+		return 0, err
+	}
+	watcherJob = h
+	return h, nil
 }
 
 // createKillOnCloseJob returns a job object handle that terminates every
