@@ -423,6 +423,49 @@ func TestSpawnIntoJobChildDiesWhenJobCloses(t *testing.T) {
 	}
 }
 
+// TestSpawnIntoJobAssignFailureStillRunsChild pins the non-fatal contract for
+// the fleet's per-boot failure: when AssignProcessToJobObject fails with
+// ERROR_ACCESS_DENIED (the child is already in a job), spawnIntoJob must run
+// the watcher anyway. Terminating it here — the old behavior — left the device
+// silent for the whole uptime; the job is only a cleanup optimization.
+func TestSpawnIntoJobAssignFailureStillRunsChild(t *testing.T) {
+	captureLogs(t)
+	job, err := createKillOnCloseJob()
+	if err != nil {
+		t.Fatalf("createKillOnCloseJob: %v", err)
+	}
+	defer windows.CloseHandle(job)
+
+	var tok windows.Token
+	if err := windows.OpenProcessToken(windows.CurrentProcess(),
+		windows.TOKEN_QUERY|windows.TOKEN_DUPLICATE|windows.TOKEN_ASSIGN_PRIMARY, &tok); err != nil {
+		t.Fatalf("OpenProcessToken: %v", err)
+	}
+	defer tok.Close()
+
+	orig := assignWatcherToJob
+	t.Cleanup(func() { assignWatcherToJob = orig })
+	assignWatcherToJob = func(windows.Handle, windows.Handle) error {
+		return windows.ERROR_ACCESS_DENIED
+	}
+
+	exe := systemCmdExe(t)
+	pi, err := spawnIntoJob(tok, exe, `"`+exe+`" /c ping -n 30 127.0.0.1 > nul`, nil, job)
+	if err != nil {
+		t.Fatalf("spawnIntoJob must not fail on a denied job assignment: %v", err)
+	}
+	defer func() {
+		windows.TerminateProcess(pi.Process, 1)
+		windows.CloseHandle(pi.Process)
+		windows.CloseHandle(pi.Thread)
+	}()
+
+	// Running, not parked suspended: the child was resumed despite the failure.
+	if s, err := waitState(pi.Process, 0); err != nil || s != waitTimedOut {
+		t.Fatalf("child state right after spawn: state=%d err=%v, want alive (WAIT_TIMEOUT)", s, err)
+	}
+}
+
 // TestGetWatcherJobRetriesAfterFailure pins the recovery contract for the
 // one fail-forever seat in the spawn chain: a job-object creation failure
 // (e.g. during an early-boot service start) must be retried on the next

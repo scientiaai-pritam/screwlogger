@@ -199,11 +199,12 @@ var (
 
 // spawnWatcherProcess launches exe with args in the token's session and with
 // no window (spec §2, §4.2). The child is not tracked by PID — pipe-connection
-// state drives reconciliation — but it IS placed in the service's kill-on-close
-// job object: when the service process exits (stop, crash, -upgrade), the job
-// handle closes and the watcher dies with it. Without that, the previous
-// generation's watcher survives a restart, redials the new pipe, and fights
-// the new watcher (newest-wins flapping) — observed live during Task 7.
+// state drives reconciliation — but it is placed, best-effort, in the service's
+// kill-on-close job object: when the service process exits (stop, crash,
+// -upgrade), the job handle closes and the watcher dies with it. A job that
+// fails to take the child (ERROR_ACCESS_DENIED — the child is already in a job)
+// is not fatal: the watcher runs anyway, because the job is only a cleanup
+// optimization, not a prerequisite for sampling.
 func spawnWatcherProcess(tok windows.Token, exe string, args []string) error {
 	env, err := createEnvironmentBlock(tok)
 	if err != nil {
@@ -232,6 +233,10 @@ func spawnWatcherProcess(tok windows.Token, exe string, args []string) error {
 // transient failure. A failure here must NOT latch: getWatcherJob retries on
 // the next spawn.
 var createWatcherJob = createKillOnCloseJob
+
+// assignWatcherToJob is the AssignProcessToJobObject seam; a var so tests can
+// inject ERROR_ACCESS_DENIED and pin the non-fatal contract.
+var assignWatcherToJob = windows.AssignProcessToJobObject
 
 var (
 	watcherJobMu sync.Mutex
@@ -276,11 +281,14 @@ func createKillOnCloseJob() (windows.Handle, error) {
 	return h, nil
 }
 
-// spawnIntoJob creates exe under tok as a suspended child, assigns it to job,
-// and resumes it. The suspend-assign-resume order closes the race where a
-// just-created child could outlive a service that dies mid-spawn: an
-// unassigned child is still suspended, and a failure after creation
-// terminates it rather than leaking it.
+// spawnIntoJob creates exe under tok as a suspended child, assigns it to job
+// (best-effort), and resumes it. The suspend-assign-resume order closes the
+// race where a just-created child could outlive a service that dies mid-spawn:
+// an unassigned child is still suspended until the resume below. A failed job
+// assignment does NOT terminate the child — without the job the watcher still
+// samples and ships, whereas terminating it leaves the device silent for the
+// whole uptime (the fleet's per-boot failure). The job is only a cleanup
+// optimization for service exit.
 func spawnIntoJob(tok windows.Token, exe, cmdLine string, env *uint16, job windows.Handle) (windows.ProcessInformation, error) {
 	cl, err := windows.UTF16PtrFromString(cmdLine)
 	if err != nil {
@@ -297,11 +305,8 @@ func spawnIntoJob(tok windows.Token, exe, cmdLine string, env *uint16, job windo
 		env, nil, si, &pi); err != nil {
 		return windows.ProcessInformation{}, err
 	}
-	if err := windows.AssignProcessToJobObject(job, pi.Process); err != nil {
-		windows.TerminateProcess(pi.Process, 1)
-		windows.CloseHandle(pi.Thread)
-		windows.CloseHandle(pi.Process)
-		return windows.ProcessInformation{}, fmt.Errorf("assign to job: %w", err)
+	if err := assignWatcherToJob(job, pi.Process); err != nil {
+		log.Printf("spawner: watcher not placed in kill-on-close job (running anyway): %v", err)
 	}
 	windows.ResumeThread(pi.Thread)
 	return pi, nil
