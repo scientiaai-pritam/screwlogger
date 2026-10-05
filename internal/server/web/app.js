@@ -139,10 +139,10 @@
   function fmtDuration(sec) {
     if (sec == null || sec < 0) return "—";
     sec = Math.round(sec);
-    var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
-    if (h > 0) return h + "h " + m + "m";
-    if (m > 0) return m + "m " + s + "s";
-    return s + "s";
+    var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
+    if (h > 0) return m > 0 ? h + "h " + m + "m" : h + "h";
+    if (m > 0) return m + "m";
+    return "<1m";
   }
   function statusBadge(status) {
     return '<span class="badge ' + esc(status) + '">' + esc(status) + "</span>";
@@ -525,7 +525,7 @@
         plugins: { legend: { display: false } },
         scales: {
           x: { ticks: { autoSkip: true, maxRotation: 45, minRotation: 0 } },
-          y: { beginAtZero: true, title: { display: true, text: "seconds" } }
+          y: { beginAtZero: true, title: { display: true, text: "dwell time" }, ticks: { callback: function (v) { return v === 0 ? "0" : fmtDuration(v); } } }
         },
         tooltip: { callbacks: { label: function (c) { return " " + fmtDuration(c.parsed.y); } } }
       }
@@ -610,8 +610,8 @@
       data: {
         labels: labels,
         datasets: [
-          { label: "Active", data: active, borderColor: "#16a34a", backgroundColor: "rgba(22,163,74,0.12)", fill: true, tension: 0.3, pointRadius: 0 },
-          { label: "Idle", data: idle, borderColor: "#d97706", backgroundColor: "rgba(217,119,6,0.10)", fill: true, tension: 0.3, pointRadius: 0 }
+          { label: "Active", data: active, borderColor: "#16a34a", borderWidth: 2, fill: false, tension: 0.3, pointRadius: 0 },
+          { label: "Idle", data: idle, borderColor: "#d97706", borderWidth: 2, borderDash: [6, 4], fill: false, tension: 0.3, pointRadius: 0 }
         ]
       },
       options: {
@@ -620,9 +620,9 @@
         plugins: { legend: { position: "bottom" } },
         scales: {
           x: { ticks: { maxTicksLimit: 12, maxRotation: 0 } },
-          y: { beginAtZero: true, title: { display: true, text: "seconds / hour" } }
+          y: { beginAtZero: true, title: { display: true, text: "dwell / hour" }, ticks: { callback: function (v) { return v === 0 ? "0" : fmtDuration(v); } } }
         },
-        tooltip: { callbacks: { label: function (c) { return " " + c.dataset.label + ": " + fmtDuration(c.parsed.y); } } }
+        tooltip: { callbacks: { label: function (c) { return " " + c.dataset.label + ": " + fmtDuration(c.parsed.y); }, footer: function (items) { var t = 0; for (var i = 0; i < items.length; i++) t += items[i].parsed.y; return "Total: " + fmtDuration(t); } } }
       }
     });
   }

@@ -1,0 +1,4 @@
+server_url: http://192.168.0.246:8998
+token: sl_wmHC00316ySf_mjYSzQycZppIAKYKHhuU0mWseG1xSQ
+data_dir: C:\ProgramData\monsvc
+idle_threshold_seconds: 180
