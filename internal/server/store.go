@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -43,7 +44,8 @@ CREATE TABLE IF NOT EXISTS heartbeats (
   category TEXT NOT NULL,
   active INTEGER NOT NULL,
   received_at INTEGER NOT NULL,
-  agent_sent_at INTEGER NOT NULL
+  agent_sent_at INTEGER NOT NULL,
+  detail TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_hb_device_ts ON heartbeats(device_id, ts);
 CREATE INDEX IF NOT EXISTS idx_hb_ts ON heartbeats(ts);
@@ -73,7 +75,25 @@ func OpenStore(dbPath string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &Store{db: db}, nil
+}
+
+// migrate applies additive schema changes to databases created by an older
+// build. The CREATE TABLE above already carries `detail` for fresh databases;
+// this adds it to one that predates the column. A duplicate-column error means
+// the migration already ran, so it is ignored.
+func migrate(db *sql.DB) error {
+	if _, err := db.Exec(`ALTER TABLE heartbeats ADD COLUMN detail TEXT NOT NULL DEFAULT ''`); err != nil {
+		if strings.Contains(err.Error(), "duplicate column name") {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -88,8 +108,8 @@ func (s *Store) InsertHeartbeats(deviceID string, agentSentAt int64, hbs []proto
 	}
 	defer tx.Rollback()
 	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO heartbeats
-		(id, device_id, ts, app, category, active, received_at, agent_sent_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+		(id, device_id, ts, app, category, active, received_at, agent_sent_at, detail)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return 0, err
 	}
@@ -101,7 +121,7 @@ func (s *Store) InsertHeartbeats(deviceID string, agentSentAt int64, hbs []proto
 		if h.Active {
 			active = 1
 		}
-		res, err := stmt.Exec(h.ID, deviceID, h.TS, h.App, h.Category, active, receivedAt, agentSentAt)
+		res, err := stmt.Exec(h.ID, deviceID, h.TS, h.App, h.Category, active, receivedAt, agentSentAt, h.Detail)
 		if err != nil {
 			return 0, err
 		}

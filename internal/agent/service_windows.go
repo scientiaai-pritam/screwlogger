@@ -23,7 +23,7 @@ type serviceHandler struct {
 // composeServiceRun builds the service-mode agent: the pipe server publishes
 // watcher samples, the spawner keeps a watcher alive, and the agent consumes
 // samples (no samples → no heartbeats).
-func composeServiceRun(cfg Config, now func() time.Time, pipe *PipeServer, sp *Spawner) func(context.Context) error {
+func composeServiceRun(cfg Config, exe string, now func() time.Time, pipe *PipeServer, sp *Spawner) func(context.Context) error {
 	return func(ctx context.Context) error {
 		fg, idle := NewWin32Sources() // required by New; unused in service mode
 		a, err := New(cfg, fg, idle, now)
@@ -33,6 +33,9 @@ func composeServiceRun(cfg Config, now func() time.Time, pipe *PipeServer, sp *S
 		samples := make(chan Sample, 128)
 		go pipe.Serve(ctx, samples)
 		go sp.Run(ctx)
+		if cfg.AutoUpdateEnabled() && cfg.ServerURL != "" {
+			go NewUpdateChecker(cfg, exe).Run(ctx)
+		}
 		return a.RunSamples(ctx, samples)
 	}
 }
@@ -48,8 +51,9 @@ func RunService(name string, cfg Config, now func() time.Time) error {
 	log.Printf("service starting (exe=%s idle=%ds)", exe, cfg.IdleThresholdSeconds)
 	pipe := NewPipeServer(samplePipeName)
 	sp := NewSpawner(exe, cfg.IdleThresholdSeconds, pipe)
+	sp.CaptureTitles = cfg.ShouldCaptureTitles()
 	h := &serviceHandler{
-		run:           composeServiceRun(cfg, now, pipe, sp),
+		run:           composeServiceRun(cfg, exe, now, pipe, sp),
 		sessionChange: sp.Poke,
 	}
 	return svc.Run(name, h)

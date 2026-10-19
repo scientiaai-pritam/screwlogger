@@ -4,9 +4,12 @@ A low-overhead Windows **usage / productivity monitor** for factory PCs. It reco
 time is spent in each application and whether the user was actively working or idle, and
 reports that to a server on the LAN.
 
-> **Not a keylogger.** ScrewLogger captures no keystrokes, no window titles, and no file paths.
-> The only data that ever leaves a PC is `{app, category, active, ts}` — which application is in
-> the foreground, a locally-resolved category, an active/idle flag, and a timestamp.
+> **Not a keylogger.** ScrewLogger captures no keystrokes and no raw input. Per heartbeat it
+> records `{app, category, active, ts}` — the foreground application, a locally-resolved category,
+> an active/idle flag, and a timestamp — plus, for a small fixed set of apps, an **app-scoped
+> context string** (`detail`): the active page/site for a browser and the open document name for
+> Photoshop. No other app's window title is ever read. Monitoring, including this context capture,
+> is disclosed to operators at employment and at install time; these are company-owned factory PCs.
 
 ## Architecture
 
@@ -121,8 +124,74 @@ exact name or a glob (`* ?`); exact match wins over glob. Without a `rules.yaml`
 reports as `Uncategorized`.
 
 > Rules match the **executable name only** (e.g. `chrome.exe`), not the site or tab open inside a
-> browser — per-site rules (like "Chrome on Pinterest → Productive") need a browser extension and
-> aren't supported yet.
+> browser. The page/site itself is captured separately as the heartbeat `detail` field (see
+> **Foreground context capture** below) and surfaced via the `/api/v1/events` query; per-site
+> *categorization* rules still need a browser extension and aren't supported yet.
+
+## Foreground context capture (`detail`)
+
+For a small, fixed set of apps the agent captures one extra string per heartbeat — the
+`detail` field — read from the foreground window title and trimmed to the useful part:
+
+| App            | `detail` contains            | Example                 |
+|----------------|------------------------------|-------------------------|
+| `chrome.exe`, `msedge.exe`, `firefox.exe`, `brave.exe`, `opera.exe`, `vivaldi.exe` | the active page/site (browser name stripped) | `Inbox (3) - Gmail` |
+| `photoshop.exe` | the open document name        | `banner.psd`            |
+
+- **Scoped by design.** Only the apps in this list are read; every other foreground app ships
+  `{app, category, active, ts}` with an empty `detail`, exactly as before.
+- **Lightweight.** It is one extra read-only Win32 call (`GetWindowText`) on the already-focused
+  window during the existing 1 Hz poll — no extra process handles, threads, or hooks.
+- **Change-driven.** A tab or document switch emits a heartbeat immediately (like an app switch),
+  so the timeline reflects what was actually open.
+- **Toggle.** On by default; set `capture_titles: false` in `agent.yaml` to disable.
+
+`detail` is stored on each heartbeat and returned by `GET /api/v1/events`.
+
+### Time per file (efficiency)
+
+The point of capturing `detail` is to answer *how long did this design take, and how much of
+that was active work?* The server aggregates heartbeat dwell time grouped by `detail`:
+
+```
+GET /api/v1/files?app=photoshop.exe&device=<id>&from=<unix>&to=<unix>
+```
+
+returns one row per file — total seconds, active vs idle seconds, an **efficiency ratio**
+(active / total), and the elapsed span (`first_seen` → `last_seen`):
+
+```json
+{"app":"photoshop.exe","files":[
+  {"file":"banner.psd","seconds":5400,"active_seconds":4800,"idle_seconds":600,
+   "ratio":0.888,"first_seen":1792400000,"last_seen":1792460000}
+]}
+```
+
+- `app` is optional (omit to include every captured app, e.g. browser pages); `device` omitted
+  aggregates the fleet with per-device gap capping.
+- Dwell is gap-capped at 30 s exactly like the category/app dashboards, so a suspended PC never
+  inflates a file's time.
+- The admin dashboard surfaces this as a **Time per file** table (with an efficiency meter) on the
+  Dashboards tab, filterable by app — defaulting to `photoshop.exe`.
+
+## Auto-update
+
+Agents can fetch and apply new builds from the server themselves — no per-PC
+`monsvc.exe -upgrade`:
+
+1. Start the server with the release it should advertise:
+   `./server -agent-binary ./monsvc.exe -agent-version 2026.10.19-1` (build the agent with the
+   matching version: `go build -ldflags "-X screwlogger/internal/agent.Version=2026.10.19-1" ./cmd/agent`).
+2. Each agent (service mode) polls `GET /v1/agent/version` every 6 h. When the advertised version
+   differs from its own build, it downloads `GET /v1/agent/download`, **verifies the sha256** against
+   the advertised hash, and launches a detached `-upgrade` process that stops the service, swaps the
+   binary, and restarts it. `agent.yaml` and the device token are untouched.
+3. A corrupt or tampered download (hash/size mismatch) is discarded and never launched; a failed
+   check is retried on the next interval and never disturbs sampling.
+
+Both endpoints require a valid device token (the same credential as ingest). Rolling out a new
+version is: replace `monsvc.exe` on the server and restart it with the new `-agent-version`. Set
+`auto_update: false` in `agent.yaml` to opt a PC out.
 
 ### Server flags
 
@@ -133,6 +202,8 @@ reports as `Uncategorized`.
 | `-enroll <name>`    | Enroll a device by name, print its one-time `sl_` token, then exit |
 | `-apikey <label>`   | Create a read-only API key with this label, print it once, then exit |
 | `-admin-password`   | Admin password (empty generates a random one, logged once)        |
+| `-agent-binary <path>` | Agent binary to serve for auto-update (enables `GET /v1/agent/*`)  |
+| `-agent-version <v>`   | Version string for the served binary (required with `-agent-binary`) |
 
 ## Deployment
 

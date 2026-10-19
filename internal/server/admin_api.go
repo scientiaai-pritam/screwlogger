@@ -29,6 +29,7 @@ func AdminAPI(store *Store, auth *AdminAuth) http.Handler {
 	api.HandleFunc("GET /admin/api/usage", handleUsage(store))
 	api.HandleFunc("GET /admin/api/active-ratio", handleActiveRatio(store))
 	api.HandleFunc("GET /admin/api/events", handleEvents(store))
+	api.HandleFunc("GET /admin/api/files", handleFiles(store))
 	return auth.RequireAdmin(api)
 }
 

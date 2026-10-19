@@ -11,6 +11,12 @@ func hbeat(id string, ts int64, app, category string, active bool) protocol.Hear
 	return protocol.Heartbeat{ID: id, TS: ts, App: app, Category: category, Active: active}
 }
 
+func hbeatD(id string, ts int64, app, category string, active bool, detail string) protocol.Heartbeat {
+	h := hbeat(id, ts, app, category, active)
+	h.Detail = detail
+	return h
+}
+
 func insertHBs(t *testing.T, s *server.Store, devID string, hbs ...protocol.Heartbeat) {
 	t.Helper()
 	if _, err := s.InsertHeartbeats(devID, 0, hbs); err != nil {
@@ -133,6 +139,66 @@ func TestListEventsOrderAndLimit(t *testing.T) {
 	}
 	if len(all) != 3 {
 		t.Fatalf("default limit: want 3, got %d", len(all))
+	}
+}
+
+func TestFileUsageGroupsByDetailWithActiveSplit(t *testing.T) {
+	s := openTestStore(t)
+	devID, _, _ := s.CreateDevice("PC-1")
+	// Designer works banner.psd (10s active), switches to logo.psd (10s idle),
+	// then a non-Photoshop app (chrome, no detail) ends the logo.psd span.
+	insertHBs(t, s, devID,
+		hbeatD("h1", 1000, "photoshop.exe", "Productive", true, "banner.psd"),
+		hbeatD("h2", 1010, "photoshop.exe", "Productive", false, "logo.psd"),
+		hbeatD("h3", 1020, "chrome.exe", "Browser", true, "Reference - Google Chrome"),
+	)
+	files, err := s.FileUsage(devID, "photoshop.exe", 1000, 1030)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("want 2 photoshop files, got %+v", files)
+	}
+	byName := map[string]server.FileBucket{}
+	for _, f := range files {
+		byName[f.File] = f
+	}
+	banner := byName["banner.psd"]
+	if banner.Seconds != 10 || banner.ActiveSeconds != 10 || banner.Ratio != 1.0 {
+		t.Fatalf("banner.psd = %+v, want 10s all active", banner)
+	}
+	logo := byName["logo.psd"]
+	if logo.Seconds != 10 || logo.IdleSeconds != 10 || logo.Ratio != 0.0 {
+		t.Fatalf("logo.psd = %+v, want 10s all idle", logo)
+	}
+	if banner.FirstSeen != 1000 || logo.FirstSeen != 1010 {
+		t.Fatalf("first-seen wrong: banner=%d logo=%d", banner.FirstSeen, logo.FirstSeen)
+	}
+}
+
+func TestFileUsageAppFilterAndExcludesEmptyDetail(t *testing.T) {
+	s := openTestStore(t)
+	devID, _, _ := s.CreateDevice("PC-1")
+	insertHBs(t, s, devID,
+		hbeatD("h1", 1000, "photoshop.exe", "Productive", true, "art.psd"),
+		hbeatD("h2", 1010, "chrome.exe", "Browser", true, "Site - Google Chrome"),
+		hbeat("h3", 1020, "excel.exe", "Office", true), // no detail at all
+	)
+	// App filter keeps only Photoshop files.
+	ps, err := s.FileUsage(devID, "photoshop.exe", 1000, 1030)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ps) != 1 || ps[0].File != "art.psd" {
+		t.Fatalf("app filter = %+v, want only art.psd", ps)
+	}
+	// No filter: both detail-bearing rows, but never the empty-detail excel row.
+	all, err := s.FileUsage(devID, "", 1000, 1030)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("unfiltered = %+v, want 2 (excel excluded)", all)
 	}
 }
 

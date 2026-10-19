@@ -22,6 +22,7 @@ func QueryAPI(store *Store) http.Handler {
 	mux.HandleFunc("GET /api/v1/usage", handleUsage(store))
 	mux.HandleFunc("GET /api/v1/active-ratio", handleActiveRatio(store))
 	mux.HandleFunc("GET /api/v1/events", handleEvents(store))
+	mux.HandleFunc("GET /api/v1/files", handleFiles(store))
 	return requireAPIKey(store, mux)
 }
 
@@ -84,6 +85,11 @@ type usageResponse struct {
 
 type eventsResponse struct {
 	Events []EventRow `json:"events"`
+}
+
+type filesResponse struct {
+	App   string       `json:"app"`
+	Files []FileBucket `json:"files"`
 }
 
 func handleDevices(store *Store) http.HandlerFunc {
@@ -200,6 +206,31 @@ func handleEvents(store *Store) http.HandlerFunc {
 			rows = []EventRow{}
 		}
 		writeJSON(w, eventsResponse{Events: rows})
+	}
+}
+
+// handleFiles serves per-file dwell time (time per design document/page), split
+// into active vs idle with an efficiency ratio. The optional `app` param filters
+// to one executable (e.g. photoshop.exe); `device` and from/to behave as elsewhere.
+func handleFiles(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		from, to, ok := parseWindow(r)
+		if !ok {
+			writeErr(w, http.StatusBadRequest, "invalid from/to")
+			return
+		}
+		app := q.Get("app")
+		files, err := store.FileUsage(q.Get("device"), app, from, to)
+		if err != nil {
+			log.Printf("query api: files: %v", err)
+			writeErr(w, http.StatusInternalServerError, "storage error")
+			return
+		}
+		if files == nil {
+			files = []FileBucket{}
+		}
+		writeJSON(w, filesResponse{App: app, Files: files})
 	}
 }
 

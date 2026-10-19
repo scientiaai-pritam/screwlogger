@@ -18,6 +18,21 @@ type Heartbeat struct {
 	App      string `json:"app"`
 	Category string `json:"category"`
 	Active   bool   `json:"active"`
+	// Detail is an optional, app-scoped foreground context string: the browser
+	// page/site for a browser, or the open document name for Photoshop. Empty
+	// for every other app, and empty when title capture is disabled. Adding it
+	// is backward-compatible — it is omitted from the wire when empty, and an
+	// older server simply ignores the field (schema_version is unchanged).
+	Detail string `json:"detail,omitempty"`
+}
+
+// AgentVersionResponse is the body of GET /v1/agent/version: the agent release
+// the server currently advertises for auto-update. An agent whose own build
+// version differs fetches GET /v1/agent/download and self-upgrades.
+type AgentVersionResponse struct {
+	Version string `json:"version"`
+	SHA256  string `json:"sha256"`
+	Size    int64  `json:"size"`
 }
 
 // IngestBatch is the body of POST /v1/ingest.

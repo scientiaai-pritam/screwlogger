@@ -23,11 +23,14 @@ func WriteConfig(exeDir, serverURL, token, dataDir string) error {
 	if dataDir == "" {
 		dataDir = `C:\ProgramData\monsvc`
 	}
+	enabled := true
 	cfg := Config{
 		ServerURL:            serverURL,
 		Token:                token,
 		DataDir:              dataDir,
 		IdleThresholdSeconds: 180,
+		CaptureTitles:        &enabled,
+		AutoUpdate:           &enabled,
 	}
 	b, err := yaml.Marshal(cfg)
 	if err != nil {

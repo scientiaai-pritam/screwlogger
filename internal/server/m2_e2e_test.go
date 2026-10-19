@@ -21,7 +21,7 @@ func TestM2EndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mux := server.NewMux(store, auth)
+	mux := server.NewMux(store, auth, nil)
 
 	// 1. Enroll a device directly on the store (as -enroll does).
 	devID, devToken, err := store.CreateDevice("PC-1")

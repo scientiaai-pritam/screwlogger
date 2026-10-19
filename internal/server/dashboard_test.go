@@ -15,7 +15,7 @@ func TestDashboardServesAdminUI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mux := server.NewMux(s, auth)
+	mux := server.NewMux(s, auth, nil)
 
 	get := func(path string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, path, nil)

@@ -463,11 +463,15 @@
     var device = $("#device-select").value || "";
     var q = "from=" + w.from + "&to=" + w.to + (device ? "&device=" + encodeURIComponent(device) : "");
 
+    var fileApp = $("#file-app").value.trim();
+    var filesQ = q + (fileApp ? "&app=" + encodeURIComponent(fileApp) : "");
+
     var jobs = [
       api("/admin/api/usage?group_by=category&" + q),
       api("/admin/api/usage?group_by=app&" + q),
       api("/admin/api/active-ratio?" + q),
-      api("/admin/api/events?limit=10000&" + q)
+      api("/admin/api/events?limit=10000&" + q),
+      api("/admin/api/files?" + filesQ)
     ];
     Promise.all(jobs).then(function (rs) {
       if (!authed(rs[0])) return;
@@ -475,6 +479,42 @@
       renderBar("box-app", "chart-app", "app", rs[1].data);
       renderRatio(rs[2].data);
       renderHourly(rs[3].data, w.to);
+      renderFiles(rs[4].data, fileApp);
+    });
+  }
+
+  // Per-file table: total time, hands-on (active) time, and an efficiency meter
+  // (active / total). This is the designers' view — how long each design took
+  // and how much of that was active work.
+  function renderFiles(data, fileApp) {
+    var tbody = $("#files-table tbody");
+    tbody.textContent = "";
+    $("#files-subtitle").textContent = fileApp ? "(" + fileApp + ")" : "(all captured apps)";
+    var files = (data && data.files) || [];
+    if (!files.length) {
+      var tr = document.createElement("tr");
+      var td = document.createElement("td");
+      td.colSpan = 6;
+      td.className = "empty";
+      td.textContent = "No file activity for this range.";
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+      return;
+    }
+    files.forEach(function (f) {
+      var pct = Math.round((f.ratio || 0) * 100);
+      var tr = document.createElement("tr");
+      tr.innerHTML =
+        '<td class="file-name" title="' + esc(f.file) + '">' + esc(f.file) + "</td>" +
+        "<td>" + esc(fmtDuration(f.seconds)) + "</td>" +
+        "<td>" + esc(fmtDuration(f.active_seconds)) + "</td>" +
+        '<td class="eff-cell">' +
+          '<span class="effbar"><span class="effbar-fill" style="width:' + pct + '%"></span></span>' +
+          '<span class="eff-pct">' + pct + "%</span>" +
+        "</td>" +
+        "<td>" + esc(fmtTs(f.first_seen)) + "</td>" +
+        "<td>" + esc(fmtTs(f.last_seen)) + "</td>";
+      tbody.appendChild(tr);
     });
   }
 
@@ -636,6 +676,7 @@
   on("#key-form", "submit", createKey);
   on("#device-select", "change", renderDashboards);
   on("#range-select", "change", renderDashboards);
+  on("#file-app", "change", renderDashboards);
   on("#refresh-dash", "click", renderDashboards);
   on("#modal-close", "click", hideModal);
   on("#modal-copy", "click", function () {

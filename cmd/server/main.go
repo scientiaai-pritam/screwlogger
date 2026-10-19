@@ -17,6 +17,8 @@ func main() {
 	enroll := flag.String("enroll", "", "enroll a device by name, print its one-time token, then exit")
 	apikey := flag.String("apikey", "", "create an API key with this label, print it once, then exit")
 	adminPassword := flag.String("admin-password", "", "admin password (empty generates a random one, logged once)")
+	agentBinary := flag.String("agent-binary", "", "path to the agent binary to serve for auto-update (enables /v1/agent/*)")
+	agentVersion := flag.String("agent-version", "", "version string for the served agent binary (required with -agent-binary)")
 	flag.Parse()
 
 	store, err := server.OpenStore(*dbPath)
@@ -51,7 +53,16 @@ func main() {
 		log.Printf("admin password (auto-generated, shown once): %s", plaintext)
 	}
 
-	mux := server.NewMux(store, auth)
+	var rel *server.AgentRelease
+	if *agentBinary != "" {
+		rel, err = server.LoadAgentRelease(*agentVersion, *agentBinary)
+		if err != nil {
+			log.Fatalf("agent release: %v", err)
+		}
+		log.Printf("agent auto-update enabled: version=%s size=%d sha256=%s", rel.Version, rel.Size, rel.SHA256)
+	}
+
+	mux := server.NewMux(store, auth, rel)
 
 	log.Printf("screwlogger server listening on %s (db: %s)", *addr, *dbPath)
 	if err := http.ListenAndServe(*addr, mux); err != nil {

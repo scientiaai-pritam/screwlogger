@@ -23,8 +23,13 @@ const (
 // with production implementations by RunWatcher; tests inject fakes.
 // DialInterval/DialBudget zero values mean the defaults above.
 type WatcherDeps struct {
-	FG             ForegroundSource
-	Idle           IdleSource
+	FG   ForegroundSource
+	Idle IdleSource
+	// Title is the optional foreground-title source. When CaptureTitles is set
+	// and Title is non-nil, the watcher reads the title for apps in the capture
+	// set and ships the extracted detail (browser page / Photoshop document).
+	Title          TitleSource
+	CaptureTitles  bool
 	OwnSession     func() (uint32, error) // this process's session id
 	ConsoleSession func() uint32          // active console session id
 	Dial           func() (io.WriteCloser, error)
@@ -93,9 +98,13 @@ func RunWatcher(ctx context.Context, idleThresholdSeconds int, deps WatcherDeps)
 			if err != nil || own != deps.ConsoleSession() {
 				continue // paused: not the active console session
 			}
+			app := deps.FG.ForegroundApp()
 			s := Sample{
-				App:    deps.FG.ForegroundApp(),
+				App:    app,
 				Active: deps.Idle.IdleSeconds() < float64(idleThresholdSeconds),
+			}
+			if deps.CaptureTitles && deps.Title != nil && ShouldCaptureTitle(app) {
+				s.Detail = ExtractDetail(app, deps.Title.ForegroundTitle())
 			}
 			if _, err := conn.Write(EncodeSample(s)); err != nil {
 				log.Printf("watcher: pipe write: %v", err)

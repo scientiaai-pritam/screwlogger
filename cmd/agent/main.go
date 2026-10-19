@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -24,6 +25,7 @@ func main() {
 	service := flag.Bool("service", false, "run as the monsvc Windows service (invoked by the SCM)")
 	userwatch := flag.Bool("userwatch", false, "run the in-session watcher (spawned by the monsvc service)")
 	idle := flag.Int("idle", 180, "idle threshold in seconds (with -userwatch)")
+	captureTitles := flag.Bool("capture-titles", false, "capture app-scoped foreground context (browser page / Photoshop doc) with -userwatch")
 	install := flag.Bool("install", false, "install and start the monsvc service")
 	uninstall := flag.Bool("uninstall", false, "stop and remove the monsvc service")
 	upgrade := flag.Bool("upgrade", false, "stop, replace (optional), and restart the monsvc service")
@@ -31,9 +33,12 @@ func main() {
 	token := flag.String("token", "", "device token sl_... (required by -install)")
 	dataDir := flag.String("data-dir", "", "data dir for -install (empty -> default)")
 	newExe := flag.String("new", "", "replacement binary path for -upgrade")
+	showVersion := flag.Bool("version", false, "print the agent build version and exit")
 	flag.Parse()
 
 	switch {
+	case *showVersion:
+		fmt.Println(agent.Version)
 	case *install:
 		runInstall(*serverURL, *token, *dataDir)
 	case *uninstall:
@@ -41,7 +46,7 @@ func main() {
 	case *upgrade:
 		runUpgrade(*newExe)
 	case *userwatch:
-		runWatcher(*idle)
+		runWatcher(*idle, *captureTitles)
 	case *service:
 		runService()
 	default:
@@ -95,11 +100,17 @@ func runService() {
 // inside the logged-on user's session, it polls foreground/idle and streams
 // samples to the service over the local pipe (spec §4.1). It holds no config
 // file, no token, and writes nothing to disk.
-func runWatcher(idleSeconds int) {
+func runWatcher(idleSeconds int, captureTitles bool) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	fg, idle := agent.NewWin32Sources()
-	err := agent.RunWatcher(ctx, idleSeconds, agent.WatcherDeps{FG: fg, Idle: idle})
+	deps := agent.WatcherDeps{FG: fg, Idle: idle, CaptureTitles: captureTitles}
+	if captureTitles {
+		if ts, ok := fg.(agent.TitleSource); ok {
+			deps.Title = ts
+		}
+	}
+	err := agent.RunWatcher(ctx, idleSeconds, deps)
 	if err != nil && ctx.Err() == nil {
 		log.Fatalf("watcher: %v", err)
 	}

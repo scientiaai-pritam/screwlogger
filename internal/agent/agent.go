@@ -16,6 +16,7 @@ type Agent struct {
 	cfg     Config
 	fg      ForegroundSource
 	idle    IdleSource
+	title   TitleSource // optional; nil when fg exposes no window title
 	now     func() time.Time
 	builder *HeartbeatBuilder
 	rules   Rules
@@ -54,8 +55,9 @@ func New(cfg Config, fg ForegroundSource, idle IdleSource, now func() time.Time)
 		log.Printf("rules: %v (starting with no rules — everything Uncategorized)", err)
 		rules = nil
 	}
+	title, _ := fg.(TitleSource) // nil for sources without a title (tests, non-Win32)
 	return &Agent{
-		cfg: cfg, fg: fg, idle: idle, now: now,
+		cfg: cfg, fg: fg, idle: idle, title: title, now: now,
 		builder: NewHeartbeatBuilder(now, DefaultKeepAlive),
 		rules:   rules, buf: buf,
 		ship: NewShipper(cfg.ServerURL, cfg.Token, buf, nil),
@@ -89,14 +91,27 @@ func (a *Agent) Run(ctx context.Context) error {
 }
 
 func (a *Agent) pollOnce() {
-	a.Observe(a.fg.ForegroundApp(), a.idle.IdleSeconds() < float64(a.cfg.IdleThresholdSeconds))
+	app := a.fg.ForegroundApp()
+	active := a.idle.IdleSeconds() < float64(a.cfg.IdleThresholdSeconds)
+	a.Observe(app, active, a.captureDetail(app))
+}
+
+// captureDetail reads the foreground window title and extracts the app-scoped
+// context string (browser page / Photoshop document) — but only when capture is
+// enabled, the source exposes a title, and app is in the capture set. Otherwise
+// it returns "", so no other app's window title is ever read or shipped.
+func (a *Agent) captureDetail(app string) string {
+	if a.title == nil || !a.cfg.ShouldCaptureTitles() || !ShouldCaptureTitle(app) {
+		return ""
+	}
+	return ExtractDetail(app, a.title.ForegroundTitle())
 }
 
 // Observe feeds one foreground/active reading through the heartbeat builder,
 // categorizer, and buffer. Console mode calls it per tick; service mode calls
-// it per pipe sample.
-func (a *Agent) Observe(app string, active bool) {
-	hb := a.builder.Observe(app, active)
+// it per pipe sample. detail is the (possibly empty) foreground-context string.
+func (a *Agent) Observe(app string, active bool, detail string) {
+	hb := a.builder.ObserveDetail(app, active, detail)
 	if hb == nil {
 		return
 	}
@@ -130,7 +145,7 @@ func (a *Agent) RunSamples(ctx context.Context, samples <-chan Sample) error {
 			<-done // let the shipper finish its current attempt
 			return nil
 		case s := <-samples:
-			a.Observe(s.App, s.Active)
+			a.Observe(s.App, s.Active, s.Detail)
 		}
 	}
 }

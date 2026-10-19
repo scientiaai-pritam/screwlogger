@@ -33,9 +33,10 @@ type samplePipe interface {
 // watcher is attached and, backoff permitting, launches one as the session
 // user. Reconciliation is driven by pipe-connection state, not PIDs (spec §4.2).
 type Spawner struct {
-	ExePath     string
-	IdleSeconds int
-	Pipe        samplePipe
+	ExePath       string
+	IdleSeconds   int
+	CaptureTitles bool // pass -capture-titles to spawned watchers
+	Pipe          samplePipe
 
 	ConsoleSession func() uint32
 	QueryToken     func(uint32) (windows.Token, error)
@@ -155,7 +156,11 @@ func (s *Spawner) reconcile() {
 	if now.Before(s.nextAttempt) {
 		return
 	}
-	if err := s.Spawn(tok, s.ExePath, []string{"-userwatch", "-idle", fmt.Sprintf("%d", s.IdleSeconds)}); err != nil {
+	args := []string{"-userwatch", "-idle", fmt.Sprintf("%d", s.IdleSeconds)}
+	if s.CaptureTitles {
+		args = append(args, "-capture-titles")
+	}
+	if err := s.Spawn(tok, s.ExePath, args); err != nil {
 		s.logChanged(fmt.Sprintf("spawner: launch watcher: %v", err))
 	} else {
 		log.Printf("spawner: launched watcher for session %d (user %s)", sid, sidStr)

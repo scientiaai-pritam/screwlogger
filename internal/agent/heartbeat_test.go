@@ -13,6 +13,23 @@ func newBuilder(start time.Time) (*agent.HeartbeatBuilder, *time.Time) {
 	return agent.NewHeartbeatBuilder(fn, agent.DefaultKeepAlive), &now
 }
 
+func TestObserveDetailEmitsOnDetailChange(t *testing.T) {
+	b, now := newBuilder(time.Unix(1000, 0))
+	if hb := b.ObserveDetail("chrome.exe", true, "Gmail"); hb == nil || hb.Detail != "Gmail" {
+		t.Fatalf("first detail observe must emit with detail: %+v", hb)
+	}
+	// Same app/active/detail, well within keep-alive: no emit.
+	*now = now.Add(time.Second)
+	if hb := b.ObserveDetail("chrome.exe", true, "Gmail"); hb != nil {
+		t.Fatalf("unchanged detail must not emit: %+v", hb)
+	}
+	// Tab switch (detail changes) emits even though app/active are unchanged.
+	*now = now.Add(time.Second)
+	if hb := b.ObserveDetail("chrome.exe", true, "Calendar"); hb == nil || hb.Detail != "Calendar" {
+		t.Fatalf("detail change must emit: %+v", hb)
+	}
+}
+
 func TestFirstObservationEmits(t *testing.T) {
 	b, _ := newBuilder(time.Unix(1000, 0))
 	hb := b.Observe("excel.exe", true)

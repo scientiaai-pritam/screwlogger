@@ -188,3 +188,25 @@ td.empty { color: var(--muted); text-align: center; padding: 28px; }
 .secret-row input { flex: 1; font-family: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace; }
 
 .error { color: var(--danger); font-size: 14px; margin: 8px 0; }
+
+/* ---------- Time-per-file card ---------- */
+.files-card { margin-top: 16px; }
+.files-card h3 .muted { font-weight: 400; font-size: 13px; }
+#files-table .file-name {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+}
+.eff-cell { display: flex; align-items: center; gap: 8px; min-width: 140px; }
+.effbar {
+  flex: 1;
+  height: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.effbar-fill { display: block; height: 100%; background: var(--ok); }
+.eff-pct { color: var(--muted); font-size: 13px; min-width: 34px; text-align: right; }

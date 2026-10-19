@@ -10,6 +10,10 @@ import (
 type Sample struct {
 	App    string `json:"app"`
 	Active bool   `json:"active"`
+	// Detail is the extracted foreground context (browser page / Photoshop
+	// document), already cleaned by ExtractDetail on the watcher side. Empty for
+	// apps outside the title-capture set and when capture is disabled.
+	Detail string `json:"detail,omitempty"`
 }
 
 // EncodeSample renders one sample as a JSON line (trailing newline included).

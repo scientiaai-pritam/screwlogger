@@ -4,3 +4,15 @@ server_url: "http://192.168.1.50:8080"
 token: "sl_PASTE_DEVICE_TOKEN_HERE"
 data_dir: "C:\\ProgramData\\monsvc"
 idle_threshold_seconds: 180
+
+# Capture app-scoped foreground context: the active page/site in a browser and
+# the open document name in Photoshop. Only these apps are read; no other app's
+# window title is ever captured. Omit or set true to enable; set false to disable.
+capture_titles: true
+
+# Fetch and apply new agent builds from the server automatically (no manual
+# `monsvc.exe -upgrade`). The agent polls GET /v1/agent/version periodically and,
+# when the server advertises a different version, downloads it (sha256-verified)
+# and self-upgrades. Requires the server to be started with -agent-binary /
+# -agent-version. Omit or set true to enable; set false to disable.
+auto_update: true

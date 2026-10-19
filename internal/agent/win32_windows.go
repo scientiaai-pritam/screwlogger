@@ -14,6 +14,8 @@ var (
 	procGetForegroundWindow     = user32.NewProc("GetForegroundWindow")
 	procGetWindowThreadProcessI = user32.NewProc("GetWindowThreadProcessId")
 	procGetLastInputInfo        = user32.NewProc("GetLastInputInfo")
+	procGetWindowTextW          = user32.NewProc("GetWindowTextW")
+	procGetWindowTextLengthW    = user32.NewProc("GetWindowTextLengthW")
 	kernel32                    = windows.NewLazySystemDLL("kernel32.dll")
 	procGetTickCount            = kernel32.NewProc("GetTickCount")
 )
@@ -55,6 +57,28 @@ func (win32Sources) ForegroundApp() string {
 	return baseName(windows.UTF16ToString(buf[:size]))
 }
 
+// ForegroundTitle returns the foreground window's title text, or "" when there
+// is no foreground window or it has no title. It is a single read-only pair of
+// Win32 calls on the already-focused window — no process open, no extra handles
+// — so it adds negligible cost to the existing 1 Hz poll. The caller decides
+// whether to read it at all (only for apps in the capture set).
+func (win32Sources) ForegroundTitle() string {
+	hwnd, _, _ := procGetForegroundWindow.Call()
+	if hwnd == 0 {
+		return ""
+	}
+	n, _, _ := procGetWindowTextLengthW.Call(hwnd)
+	if n == 0 {
+		return ""
+	}
+	buf := make([]uint16, int(n)+1) // +1 for the NUL GetWindowTextW writes
+	r, _, _ := procGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	if r == 0 {
+		return ""
+	}
+	return windows.UTF16ToString(buf[:r])
+}
+
 // IdleSeconds returns seconds since last input via GetLastInputInfo (spec §3.1).
 func (win32Sources) IdleSeconds() float64 {
 	var li lastInputInfo
@@ -82,4 +106,5 @@ func baseName(p string) string {
 var (
 	_ ForegroundSource = win32Sources{}
 	_ IdleSource       = win32Sources{}
+	_ TitleSource      = win32Sources{}
 )
