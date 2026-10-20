@@ -45,6 +45,13 @@ func TestExtractDetailPhotoshop(t *testing.T) {
 		{"Adobe Photoshop 2024 - [Untitled-1 @ 100% (RGB/8)]", "Untitled-1"},
 		{"job-42.psd @ 66,7% (Layer 1, RGB/8) - Adobe Photoshop 2023", "job-42.psd"},
 		{"Adobe Photoshop 2021 - banner.psd @ 25% (RGB/8)", "banner.psd"},
+		// CS6 document-window title (no brand text, just the doc).
+		{"1791205261076__000000250_0.jpg @ 97.4% (RGB/8#)", "1791205261076__000000250_0.jpg"},
+		// Not documents — must be dropped (no " @ " zoom marker):
+		{"Adobe Photoshop CS6 Extended", ""}, // empty app frame
+		{"New", ""},                          // File > New dialog
+		{"Open", ""},                         // File > Open dialog
+		{"Save As", ""},                      // Save dialog
 	}
 	for _, c := range cases {
 		if got := agent.ExtractDetail("photoshop.exe", c.title); got != c.want {

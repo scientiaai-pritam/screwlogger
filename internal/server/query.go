@@ -159,7 +159,10 @@ func (s *Store) FileUsage(deviceID, app string, from, to int64) ([]FileBucket, e
 	appClause := ""
 	args := dwellArgs(deviceID, from, to)
 	if app != "" {
-		appClause = " AND app = :app"
+		// Case-insensitive: the executable's on-disk casing varies by app
+		// (chrome.exe vs Photoshop.exe for CS6), but callers filter with a
+		// lowercase name, so match without regard to case.
+		appClause = " AND app = :app COLLATE NOCASE"
 		args = append(args, sql.Named("app", app))
 	}
 	q := fmt.Sprintf(`

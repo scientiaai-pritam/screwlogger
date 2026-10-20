@@ -99,13 +99,19 @@ func browserDetail(title string) string {
 // photoshopDetail extracts the open document name from a Photoshop window title.
 // Observed shapes across versions:
 //
-//	"Adobe Photoshop 2024 - [Untitled-1 @ 100% (RGB/8)]"
+//	"Adobe Photoshop 2024 - [Untitled-1 @ 100% (RGB/8)]"     (CC, app frame)
 //	"job-42.psd @ 66,7% (Layer 1, RGB/8) - Adobe Photoshop 2023"
-//	"Adobe Photoshop 2021 - banner.psd @ 25% (RGB/8)"
+//	"banner.psd @ 25% (RGB/8#)"                               (CS6 document window)
 //
-// The brand prefix/suffix is removed, surrounding brackets are dropped, and the
-// zoom/layer tail after " @ " is cut, leaving just the document name.
+// Every real document window carries a " @ <zoom>" marker. Titles without it are
+// not documents — the empty app frame ("Adobe Photoshop CS6 Extended") and modal
+// dialogs ("New", "Open", "Save As") — and return "" so they never show up as a
+// file. For a real title the brand prefix/suffix is removed, surrounding brackets
+// are dropped, and the zoom/layer tail after " @ " is cut, leaving the doc name.
 func photoshopDetail(title string) string {
+	if !strings.Contains(title, " @ ") {
+		return "" // app frame with no document, or a modal dialog — not a file
+	}
 	s := title
 	// Drop a trailing " - Adobe Photoshop ..." brand suffix.
 	if i := strings.Index(s, " - Adobe Photoshop"); i >= 0 {
