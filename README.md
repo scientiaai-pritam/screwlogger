@@ -180,10 +180,11 @@ Agents can fetch and apply new builds from the server themselves — no per-PC
 `monsvc.exe -upgrade`:
 
 1. Start the server with the release it should advertise:
-   `./server -agent-binary ./monsvc.exe -agent-version 2026.10.19-1` (build the agent with the
-   matching version: `go build -ldflags "-X screwlogger/internal/agent.Version=2026.10.19-1" ./cmd/agent`).
-2. Each agent (service mode) polls `GET /v1/agent/version` every 6 h. When the advertised version
-   differs from its own build, it downloads `GET /v1/agent/download`, **verifies the sha256** against
+   `./server -agent-binary ./monsvc.exe -agent-version 2026.10.19-1` (stamping the agent with the
+   same version is recommended so `monsvc.exe -version` and the logs read correctly:
+   `go build -ldflags "-X screwlogger/internal/agent.Version=2026.10.19-1" ./cmd/agent`).
+2. Each agent (service mode) polls `GET /v1/agent/version` every 6 h. When the advertised sha256
+   differs from its installed binary's, it downloads `GET /v1/agent/download`, **verifies the sha256** against
    the advertised hash, and launches a detached `-upgrade` process that stops the service, swaps the
    binary, and restarts it. `agent.yaml` and the device token are untouched.
 3. A corrupt or tampered download (hash/size mismatch) is discarded and never launched; a failed

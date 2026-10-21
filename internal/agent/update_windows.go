@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -39,8 +40,8 @@ const updateHTTPTimeout = 10 * time.Minute
 // ever considers replacing itself.
 const updateInitialDelay = 2 * time.Minute
 
-// UpdateChecker periodically asks the server which agent version it advertises
-// and, when it differs from this build, downloads the new binary (sha256-
+// UpdateChecker periodically asks the server which agent release it advertises
+// and, when it is not the binary already installed, downloads it (sha256-
 // verified) and launches it as a detached `-upgrade` process that swaps the
 // service binary and restarts it. It runs only in service mode.
 type UpdateChecker struct {
@@ -102,7 +103,7 @@ func (u *UpdateChecker) checkOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if rel.Version == "" || rel.Version == u.currentVersion {
+	if rel.Version == "" || u.isCurrent(rel) {
 		return nil // server advertises no release, or we already run it
 	}
 	log.Printf("auto-update: server advertises %s (running %s); downloading", rel.Version, u.currentVersion)
@@ -116,6 +117,39 @@ func (u *UpdateChecker) checkOnce(ctx context.Context) error {
 	}
 	// The detached child will stop this service shortly; nothing more to do.
 	return nil
+}
+
+// isCurrent reports whether the advertised release is the binary already
+// installed. It compares the installed exe's sha256 against the advertised hash,
+// not version strings: a build whose stamped Version differs from the server's
+// -agent-version (an unstamped "dev" build, a typo) would otherwise look out of
+// date forever and re-upgrade on every check — a fleet-wide restart loop. By
+// hash, the release is applied once and then matches, whatever its version
+// string says. The version string is only a fallback for when there is no hash
+// to compare (none advertised, or the installed exe cannot be read).
+func (u *UpdateChecker) isCurrent(rel protocol.AgentVersionResponse) bool {
+	if rel.SHA256 != "" {
+		got, err := fileSHA256(u.exePath)
+		if err == nil {
+			return strings.EqualFold(got, rel.SHA256)
+		}
+		log.Printf("auto-update: hash installed exe: %v (falling back to version compare)", err)
+	}
+	return rel.Version == u.currentVersion
+}
+
+// fileSHA256 returns the hex sha256 of the file at path.
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // fetchVersion GETs /v1/agent/version with the device token.
